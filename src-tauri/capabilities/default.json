@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for courseflow",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:allow-open",
+    "fs:allow-read-text-file",
+    "fs:allow-read-file",
+    "fs:scope-home-recursive",
+    "fs:scope-download-recursive"
+  ]
+}

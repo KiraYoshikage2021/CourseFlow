@@ -422,14 +422,14 @@ function ProjectCard({
     <div
       className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer ${
         highlighted
-          ? "border-indigo-500 bg-indigo-950/30"
+          ? "border-indigo-500 bg-indigo-500/10"
           : "border-[var(--border-default)] bg-[var(--bg-card)] hover:border-[var(--border-strong)]"
       }`}
       onClick={onEdit}
     >
       {/* 颜色头像 */}
       <div
-        className="w-10 h-10 rounded-full flex items-center justify-center text-[var(--text-primary)] font-bold text-base flex-shrink-0"
+        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base flex-shrink-0"
         style={{ backgroundColor: color }}
       >
         {project.name.charAt(0)}

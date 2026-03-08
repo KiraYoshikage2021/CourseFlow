@@ -333,7 +333,7 @@ function DayCell({
       onClick={onClick}
       className={`rounded-xl p-1.5 cursor-pointer transition-colors flex flex-col min-h-[72px] border
         ${isToday
-          ? "bg-green-950/40 border-green-600"
+          ? "bg-green-500/10 border-green-600"
           : isCurrentMonth
           ? "bg-[var(--bg-card)] border-[var(--border-default)] hover:border-[var(--bg-subtle)]"
           : "bg-[var(--bg-card)] border-[var(--border-default)] opacity-40"

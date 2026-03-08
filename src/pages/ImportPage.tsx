@@ -165,39 +165,39 @@ function GenerateDialog({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-semibold text-white">生成学习计划</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={18} /></button>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)]">生成学习计划</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"><X size={18} /></button>
         </div>
 
         <div className="flex flex-col gap-4">
           {/* 项目名称 */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">项目名称</label>
+            <label className="block text-xs text-[var(--text-tertiary)] mb-1">项目名称</label>
             <input
               autoFocus
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
-              className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
             />
           </div>
 
           {/* 书籍总页数 */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">书籍总页数</label>
+            <label className="block text-xs text-[var(--text-tertiary)] mb-1">书籍总页数</label>
             <input
               type="number"
               value={totalPages}
               onChange={(e) => setTotalPages(e.target.value)}
-              className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
             />
-            <p className="text-[10px] text-gray-600 mt-0.5">已从 JSON 自动读取</p>
+            <p className="text-[10px] text-[var(--text-faint)] mt-0.5">已从 JSON 自动读取</p>
           </div>
 
           {/* 每日页数范围 */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">每日学习页数范围</label>
+            <label className="block text-xs text-[var(--text-tertiary)] mb-1">每日学习页数范围</label>
             <div className="flex gap-3">
               <div className="flex-1">
                 <input
@@ -205,17 +205,17 @@ function GenerateDialog({
                   value={minPages}
                   onChange={(e) => setMinPages(e.target.value)}
                   placeholder="最小值"
-                  className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                 />
               </div>
-              <div className="flex items-center text-gray-600"><ChevronRight size={14} /></div>
+              <div className="flex items-center text-[var(--text-faint)]"><ChevronRight size={14} /></div>
               <div className="flex-1">
                 <input
                   type="number"
                   value={maxPages}
                   onChange={(e) => setMaxPages(e.target.value)}
                   placeholder="最大值"
-                  className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                 />
               </div>
             </div>
@@ -223,12 +223,12 @@ function GenerateDialog({
 
           {/* 开始日期 */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">开始日期</label>
+            <label className="block text-xs text-[var(--text-tertiary)] mb-1">开始日期</label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
             />
           </div>
 
@@ -241,7 +241,7 @@ function GenerateDialog({
         <div className="flex gap-3 mt-6">
           <button
             onClick={onClose}
-            className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors text-sm"
+            className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors text-sm"
           >
             取消
           </button>
@@ -362,25 +362,25 @@ export default function ImportPage() {
     <div className="p-8 max-w-2xl mx-auto h-full flex flex-col">
       {/* 标题 */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white mb-1">导入学习计划</h1>
-        <p className="text-gray-500 text-sm">上传书签 JSON，自动生成按章节分配的学习日程</p>
+        <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">导入学习计划</h1>
+        <p className="text-[var(--text-muted)] text-sm">上传书签 JSON，自动生成按章节分配的学习日程</p>
       </div>
 
       {/* 状态区 */}
       <div className="flex flex-col items-center py-8 gap-3 flex-shrink-0">
         {loading ? (
-          <div className="text-gray-500 text-sm animate-pulse">处理中…</div>
+          <div className="text-[var(--text-muted)] text-sm animate-pulse">处理中…</div>
         ) : bookmarks.length === 0 ? (
-          <FileJson size={52} className="text-gray-700" />
+          <FileJson size={52} className="text-[var(--text-faintest)]" />
         ) : (
           <CheckCircle2 size={52} className="text-green-500" />
         )}
 
-        <p className="font-semibold text-white text-sm">
+        <p className="font-semibold text-[var(--text-primary)] text-sm">
           {bookmarks.length === 0 ? "尚未选择文件" : fileName}
         </p>
         {bookmarks.length > 0 && (
-          <p className="text-gray-500 text-xs">
+          <p className="text-[var(--text-muted)] text-xs">
             共 {totalPages} 页 · {bookmarks.length} 个章节
           </p>
         )}
@@ -391,21 +391,21 @@ export default function ImportPage() {
         )}
       </div>
 
-      <div className="border-t border-gray-800 my-2" />
+      <div className="border-t border-[var(--border-default)] my-2" />
 
       {/* 书签列表 */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {bookmarks.length === 0 ? (
-          <div className="text-gray-600 text-sm text-center py-12">
+          <div className="text-[var(--text-faint)] text-sm text-center py-12">
             请点击下方按钮选择 JSON 文件
           </div>
         ) : (
-          <div className="divide-y divide-gray-800">
+          <div className="divide-y divide-[var(--border-default)]">
             {bookmarks.map((bm, i) => (
               <div key={i} className="flex items-center gap-3 py-2.5 px-1">
-                <span className="text-gray-600 text-xs w-8 text-right flex-shrink-0">#{i + 1}</span>
-                <span className="flex-1 text-gray-300 text-sm truncate">{bm.title}</span>
-                <span className="text-gray-500 text-xs flex-shrink-0 font-mono">P.{bm.page}</span>
+                <span className="text-[var(--text-faint)] text-xs w-8 text-right flex-shrink-0">#{i + 1}</span>
+                <span className="flex-1 text-[var(--text-secondary)] text-sm truncate">{bm.title}</span>
+                <span className="text-[var(--text-muted)] text-xs flex-shrink-0 font-mono">P.{bm.page}</span>
               </div>
             ))}
           </div>
@@ -428,7 +428,7 @@ export default function ImportPage() {
             <button
               onClick={clearFile}
               disabled={loading}
-              className="flex items-center gap-1.5 px-4 py-3 rounded-2xl border border-gray-700 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
+              className="flex items-center gap-1.5 px-4 py-3 rounded-2xl border border-[var(--border-strong)] text-red-400 hover:bg-red-500/10 transition-colors text-sm"
             >
               <Trash2 size={15} />
               重选

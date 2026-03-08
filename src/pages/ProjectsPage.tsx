@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus, X, Trash2, CalendarPlus, ListChecks,
   GripVertical, FolderOpen, CheckCircle2, Circle,
@@ -13,16 +13,8 @@ function colorToHex(val: number) {
   return "#" + (val & 0xffffff).toString(16).padStart(6, "0");
 }
 
-/** 本地日期格式化（避免 UTC 偏移） */
-function toDateStr(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 const DIFFICULTY_CONFIG = {
-  low:    { label: "低", icon: Coffee,     color: "text-gray-400" },
+  low:    { label: "低", icon: Coffee,     color: "text-[var(--text-tertiary)]" },
   medium: { label: "中", icon: TrendingUp, color: "text-blue-400" },
   high:   { label: "高", icon: Flame,      color: "text-orange-400" },
 } as const;
@@ -48,7 +40,7 @@ function getProjectEvents(
   }
   return result.sort((a, b) => {
     if (!a.date && !b.date) return 0;
-    if (!a.date) return 1;
+    if (!a.date) return 1;   // 无日期排最后
     if (!b.date) return -1;
     return a.date.localeCompare(b.date);
   });
@@ -78,23 +70,23 @@ function ProjectEditorDialog({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-semibold text-white">{isEditing ? "编辑项目" : "新建项目"}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={18} /></button>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)]">{isEditing ? "编辑项目" : "新建项目"}</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"><X size={18} /></button>
         </div>
 
-        <label className="block text-sm text-gray-400 mb-1.5">项目名称</label>
+        <label className="block text-sm text-[var(--text-tertiary)] mb-1.5">项目名称</label>
         <input
           autoFocus={!isEditing}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSave()}
-          className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 mb-5 outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 mb-5 outline-none focus:ring-2 focus:ring-indigo-500"
           placeholder="例如：量子力学"
         />
 
-        <label className="block text-sm text-gray-400 mb-2">难度等级</label>
+        <label className="block text-sm text-[var(--text-tertiary)] mb-2">难度等级</label>
         <div className="flex gap-2 mb-6">
           {(["low", "medium", "high"] as Difficulty[]).map((d) => {
             const cfg = DIFFICULTY_CONFIG[d];
@@ -102,7 +94,7 @@ function ProjectEditorDialog({
             return (
               <button key={d} onClick={() => setDifficulty(d)}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-medium transition-colors ${
-                  difficulty === d ? "bg-indigo-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                  difficulty === d ? "bg-indigo-600 text-white" : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] hover:bg-[var(--bg-subtle)]"
                 }`}
               >
                 <Icon size={14} />{cfg.label}
@@ -112,7 +104,7 @@ function ProjectEditorDialog({
         </div>
 
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors">取消</button>
+          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors">取消</button>
           <button onClick={handleSave} disabled={saving || !name.trim()}
             className="flex-1 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors font-medium"
           >
@@ -146,28 +138,28 @@ function AddEventDialog({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-center gap-2 mb-5">
           <div className="w-3 h-3 rounded-full flex-shrink-0"
             style={{ backgroundColor: colorToHex(project.color_value) }} />
-          <h2 className="text-lg font-semibold text-white flex-1 truncate">
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] flex-1 truncate">
             为「{project.name}」添加日程
           </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"><X size={18} /></button>
         </div>
 
-        <label className="block text-sm text-gray-400 mb-1.5">具体事项</label>
+        <label className="block text-sm text-[var(--text-tertiary)] mb-1.5">具体事项</label>
         <input
           autoFocus
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSave()}
-          className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 mb-6 outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 mb-6 outline-none focus:ring-2 focus:ring-indigo-500"
           placeholder="具体事项…"
         />
 
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors">取消</button>
+          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors">取消</button>
           <button onClick={handleSave} disabled={saving || !title.trim()}
             className="flex-1 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors font-medium"
           >
@@ -179,180 +171,56 @@ function AddEventDialog({
   );
 }
 
-// ── 【重写】批量添加日程弹窗（对齐 Flutter BatchAddEventsDialog）────
+// ── 批量添加日程弹窗 ─────────────────────────────────────────
 
 function BatchAddDialog({
   project, onSave, onClose,
 }: {
   project: Project;
-  onSave: (events: CalendarEvent[]) => Promise<void>;
+  onSave: (titles: string[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const [baseName, setBaseName] = useState(project.name);
-  const [count, setCount] = useState(5);
-  const [namingMode, setNamingMode] = useState<0 | 1>(0); // 0: 同名, 1: 序号递增
-  const [startDate, setStartDate] = useState(toDateStr(new Date()));
-  const [isDaily, setIsDaily] = useState(true);
+  const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // 计算预计结束日期
-  const endDate = (() => {
-    if (!isDaily || count <= 1) return startDate;
-    const d = new Date(startDate + "T00:00:00");
-    d.setDate(d.getDate() + count - 1);
-    return toDateStr(d);
-  })();
+  const titles = text.split("\n").map((t) => t.trim()).filter(Boolean);
 
-  // 预览生成的事件标题
-  const previewTitles = Array.from({ length: Math.min(count, 5) }, (_, i) => {
-    if (namingMode === 0) return baseName;
-    const pad = count > 9 ? 2 : 1;
-    return `${baseName} ${String(i + 1).padStart(pad, "0")}`;
-  });
-
-  async function handleGenerate() {
-    if (!baseName.trim() || count <= 0) return;
+  async function handleSave() {
+    if (titles.length === 0) return;
     setSaving(true);
-    try {
-      const now = new Date().toISOString();
-      const events: CalendarEvent[] = [];
-      const base = new Date(startDate + "T00:00:00");
-
-      for (let i = 0; i < count; i++) {
-        let title = baseName.trim();
-        if (namingMode === 1) {
-          const pad = count > 9 ? 2 : 1;
-          title = `${title} ${String(i + 1).padStart(pad, "0")}`;
-        }
-
-        let date: string | null = null;
-        if (isDaily) {
-          const d = new Date(base);
-          d.setDate(d.getDate() + i);
-          date = toDateStr(d);
-        }
-
-        events.push({
-          id: crypto.randomUUID(),
-          title,
-          date,
-          created_at: now,
-          is_completed: false,
-          project_id: project.id,
-        });
-      }
-
-      await onSave(events);
-      onClose();
-    } catch {
-      alert("批量添加失败，请重试");
-    } finally {
-      setSaving(false);
-    }
+    try { await onSave(titles); onClose(); }
+    catch { alert("批量添加失败，请重试"); }
+    finally { setSaving(false); }
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <div className="flex items-center gap-2 mb-5">
           <div className="w-3 h-3 rounded-full flex-shrink-0"
             style={{ backgroundColor: colorToHex(project.color_value) }} />
-          <h2 className="text-lg font-semibold text-white flex-1 truncate">批量添加日程</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={18} /></button>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] flex-1 truncate">批量添加日程</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"><X size={18} /></button>
         </div>
 
-        {/* 名称前缀 */}
-        <label className="block text-sm text-gray-400 mb-1.5">日程名称前缀</label>
-        <input
+        <label className="block text-sm text-[var(--text-tertiary)] mb-1.5">
+          每行一个事项（共 {titles.length} 条）
+        </label>
+        <textarea
           autoFocus
-          value={baseName}
-          onChange={(e) => setBaseName(e.target.value)}
-          className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-          placeholder="例如：背单词"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={8}
+          className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 mb-6 outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
+          placeholder={"第一章复习\n第二章习题\n背单词 50 个\n…"}
         />
 
-        {/* 生成数量 */}
-        <label className="block text-sm text-gray-400 mb-1.5">生成数量</label>
-        <input
-          type="number"
-          min={1}
-          max={999}
-          value={count}
-          onChange={(e) => setCount(Math.max(1, parseInt(e.target.value) || 1))}
-          className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-        />
-
-        {/* 命名模式 */}
-        <label className="block text-sm text-gray-400 mb-2">命名模式</label>
-        <div className="flex gap-2 mb-4">
-          <button
-            onClick={() => setNamingMode(0)}
-            className={`flex-1 py-2 rounded-xl text-sm font-medium transition-colors ${
-              namingMode === 0 ? "bg-indigo-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
-            }`}
-          >
-            完全同名
-          </button>
-          <button
-            onClick={() => setNamingMode(1)}
-            className={`flex-1 py-2 rounded-xl text-sm font-medium transition-colors ${
-              namingMode === 1 ? "bg-indigo-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
-            }`}
-          >
-            序号递增
-          </button>
-        </div>
-
-        {/* 时间安排 */}
-        <label className="block text-sm text-gray-400 mb-2">时间安排</label>
-        <div className="flex items-center gap-3 mb-2">
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="flex-1 bg-gray-700 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-          />
-          <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer flex-shrink-0">
-            <span>每日一条</span>
-            <div
-              onClick={() => setIsDaily(!isDaily)}
-              className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${
-                isDaily ? "bg-indigo-600" : "bg-gray-600"
-              }`}
-            >
-              <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-transform ${
-                isDaily ? "translate-x-5" : "translate-x-0.5"
-              }`} />
-            </div>
-          </label>
-        </div>
-        {isDaily && (
-          <p className="text-xs text-gray-500 mb-4">
-            预计结束于：{endDate}
-          </p>
-        )}
-        {!isDaily && (
-          <p className="text-xs text-yellow-600 mb-4">
-            关闭「每日一条」后，所有事件将为待分配状态（无日期）
-          </p>
-        )}
-
-        {/* 预览 */}
-        <div className="bg-gray-900 rounded-xl px-3 py-2 mb-5">
-          <p className="text-xs text-gray-500 mb-1.5">预览（共 {count} 条）</p>
-          {previewTitles.map((t, i) => (
-            <p key={i} className="text-xs text-gray-300 truncate">• {t}</p>
-          ))}
-          {count > 5 && <p className="text-xs text-gray-600">…还有 {count - 5} 条</p>}
-        </div>
-
-        {/* 按钮 */}
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors">取消</button>
-          <button onClick={handleGenerate} disabled={saving || !baseName.trim() || count <= 0}
+          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors">取消</button>
+          <button onClick={handleSave} disabled={saving || titles.length === 0}
             className="flex-1 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors font-medium"
           >
-            {saving ? "生成中…" : `生成 ${count} 条`}
+            {saving ? "添加中…" : `添加 ${titles.length} 条`}
           </button>
         </div>
       </div>
@@ -406,39 +274,41 @@ function ProjectEventsDialog({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+        {/* 标题栏 */}
         <div className="flex items-center gap-2 mb-4 flex-shrink-0">
           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-          <span className="font-semibold text-white flex-1 truncate">
+          <span className="font-semibold text-[var(--text-primary)] flex-1 truncate">
             {manageMode ? "批量管理" : "日程列表"} · {project.name}
           </span>
           {!manageMode && (
             <button onClick={onOpenBatchAdd}
-              className="text-gray-400 hover:text-indigo-400 transition-colors p-1" title="批量添加">
+              className="text-[var(--text-tertiary)] hover:text-indigo-400 transition-colors p-1" title="批量添加">
               <PlusCircle size={17} />
             </button>
           )}
           <button
             onClick={() => { setManageMode((v) => !v); setSelected(new Set()); }}
-            className="text-gray-400 hover:text-indigo-400 transition-colors p-1"
+            className="text-[var(--text-tertiary)] hover:text-indigo-400 transition-colors p-1"
             title={manageMode ? "退出管理" : "批量管理"}
           >
             <ListChecks size={17} />
           </button>
-          <button onClick={onClose} className="text-gray-400 hover:text-white p-1">
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] p-1">
             <X size={17} />
           </button>
         </div>
 
+        {/* 列表 */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-1 min-h-0">
           {entries.length === 0 ? (
-            <p className="text-gray-600 text-sm text-center py-12">暂无相关日程</p>
+            <p className="text-[var(--text-faint)] text-sm text-center py-12">暂无相关日程</p>
           ) : (
             entries.map(({ date, event }) => (
               <div
                 key={event.id}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-xl group transition-colors cursor-pointer ${
-                  manageMode && selected.has(event.id) ? "bg-indigo-900/40" : "hover:bg-gray-700"
+                  manageMode && selected.has(event.id) ? "bg-indigo-900/40" : "hover:bg-[var(--bg-muted)]"
                 }`}
                 onClick={() => manageMode && toggleSelect(event.id)}
               >
@@ -447,24 +317,24 @@ function ProjectEventsDialog({
                     onChange={() => toggleSelect(event.id)}
                     className="w-4 h-4 accent-indigo-500 flex-shrink-0" />
                 ) : (
-                  <div className="flex-shrink-0 text-gray-500">
+                  <div className="flex-shrink-0 text-[var(--text-muted)]">
                     {event.is_completed
                       ? <CheckCircle2 size={16} className="text-green-500" />
                       : <Circle size={16} />}
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm truncate ${event.is_completed ? "line-through text-gray-500" : "text-gray-100"}`}>
+                  <p className={`text-sm truncate ${event.is_completed ? "line-through text-[var(--text-muted)]" : "text-[var(--text-primary)]"}`}>
                     {event.title}
                   </p>
-                  <p className="text-[10px] text-gray-600">
+                  <p className="text-[10px] text-[var(--text-faint)]">
                     {date ?? <span className="text-yellow-600">待分配</span>}
                   </p>
                 </div>
                 {!manageMode && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onDeleteSingle(event.id, date); }}
-                    className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all p-1"
+                    className="opacity-0 group-hover:opacity-100 text-[var(--text-muted)] hover:text-red-400 transition-all p-1"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -474,8 +344,9 @@ function ProjectEventsDialog({
           )}
         </div>
 
+        {/* 底部操作栏 */}
         {manageMode ? (
-          <div className="flex gap-2 mt-4 pt-4 border-t border-gray-700 flex-shrink-0">
+          <div className="flex gap-2 mt-4 pt-4 border-t border-[var(--border-strong)] flex-shrink-0">
             <button onClick={handleBatchDelete} disabled={selected.size === 0 || busy}
               className="flex-1 py-2 rounded-xl bg-red-600/80 text-white hover:bg-red-500 disabled:opacity-40 text-sm transition-colors font-medium">
               删除 ({selected.size})
@@ -486,9 +357,9 @@ function ProjectEventsDialog({
             </button>
           </div>
         ) : (
-          <div className="mt-4 pt-4 border-t border-gray-700 flex-shrink-0">
+          <div className="mt-4 pt-4 border-t border-[var(--border-strong)] flex-shrink-0">
             <button onClick={onClose}
-              className="w-full py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 text-sm transition-colors">
+              className="w-full py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] text-sm transition-colors">
               关闭
             </button>
           </div>
@@ -510,14 +381,14 @@ function ConfirmDeleteDialog({
   const [busy, setBusy] = useState(false);
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <h2 className="text-lg font-semibold text-white mb-3">删除项目</h2>
-        <p className="text-gray-400 text-sm mb-6">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-3">删除项目</h2>
+        <p className="text-[var(--text-tertiary)] text-sm mb-6">
           确定要删除「{projectName}」吗？<br />
           <span className="text-red-400">该项目下的所有日程也会被一并删除！</span>
         </p>
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors">取消</button>
+          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors">取消</button>
           <button onClick={async () => { setBusy(true); await onConfirm(); }} disabled={busy}
             className="flex-1 py-2 rounded-xl bg-red-600 text-white hover:bg-red-500 disabled:opacity-50 transition-colors font-medium">
             {busy ? "删除中…" : "删除"}
@@ -528,24 +399,21 @@ function ConfirmDeleteDialog({
   );
 }
 
-// ── 【重写】项目卡片 ─────────────────────────────────────────
+// ── 项目卡片 ─────────────────────────────────────────────────
 
 function ProjectCard({
-  project, highlighted, isDragOver,
-  onEdit, onAddEvent, onShowEvents, onDelete,
-  onDragStart, onDragEnd,
+  project, highlighted, onDragStart, onEdit, onAddEvent, onShowEvents, onDelete,
 }: {
   project: Project;
   highlighted: boolean;
-  isDragOver: boolean;
+  onDragStart: (e: React.DragEvent) => void;
   onEdit: () => void;
   onAddEvent: () => void;
   onShowEvents: () => void;
   onDelete: () => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
 }) {
   const color = colorToHex(project.color_value);
+  // 兼容 Rust 可能返回 "Low"/"Medium"/"High"（PascalCase）的情况
   const diffKey = (project.difficulty?.toLowerCase() ?? "low") as Difficulty;
   const diffCfg = DIFFICULTY_CONFIG[diffKey] ?? DIFFICULTY_CONFIG["low"];
   const DiffIcon = diffCfg.icon;
@@ -553,17 +421,15 @@ function ProjectCard({
   return (
     <div
       className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all cursor-pointer ${
-        isDragOver
-          ? "border-indigo-400 bg-indigo-950/40 scale-[1.01]"
-          : highlighted
+        highlighted
           ? "border-indigo-500 bg-indigo-950/30"
-          : "border-gray-800 bg-gray-900 hover:border-gray-700"
+          : "border-[var(--border-default)] bg-[var(--bg-card)] hover:border-[var(--border-strong)]"
       }`}
       onClick={onEdit}
     >
       {/* 颜色头像 */}
       <div
-        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base flex-shrink-0"
+        className="w-10 h-10 rounded-full flex items-center justify-center text-[var(--text-primary)] font-bold text-base flex-shrink-0"
         style={{ backgroundColor: color }}
       >
         {project.name.charAt(0)}
@@ -572,164 +438,37 @@ function ProjectCard({
       {/* 名称 + 难度 */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="font-semibold text-white truncate">{project.name}</span>
+          <span className="font-semibold text-[var(--text-primary)] truncate">{project.name}</span>
           <DiffIcon size={14} className={diffCfg.color} />
         </div>
-        <span className="text-xs text-gray-600">优先级 {project.priority}</span>
+        <span className="text-xs text-[var(--text-faint)]">优先级 {project.priority}</span>
       </div>
 
-      {/* 操作区 */}
+      {/* 操作区（阻止冒泡到 onEdit）*/}
       <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
         <button onClick={onAddEvent}
-          className="p-2 text-gray-500 hover:text-blue-400 transition-colors rounded-lg hover:bg-gray-800" title="添加日程">
+          className="p-2 text-[var(--text-muted)] hover:text-blue-400 transition-colors rounded-lg hover:bg-[var(--bg-elevated)]" title="添加日程">
           <CalendarPlus size={16} />
         </button>
         <button onClick={onShowEvents}
-          className="p-2 text-gray-500 hover:text-purple-400 transition-colors rounded-lg hover:bg-gray-800" title="查看全部日程">
+          className="p-2 text-[var(--text-muted)] hover:text-purple-400 transition-colors rounded-lg hover:bg-[var(--bg-elevated)]" title="查看全部日程">
           <ListChecks size={16} />
         </button>
         <button onClick={onDelete}
-          className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-gray-800" title="删除项目">
+          className="p-2 text-[var(--text-muted)] hover:text-red-400 transition-colors rounded-lg hover:bg-[var(--bg-elevated)]" title="删除项目">
           <Trash2 size={15} />
         </button>
-        {/* 拖拽手柄：mousedown 触发拖拽 */}
+        {/* 拖拽手柄：只有手柄可以发起拖拽 */}
         <div
-          className="p-2 text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing rounded-lg hover:bg-gray-800"
+          draggable
+          onDragStart={onDragStart}
+          className="p-2 text-[var(--text-faint)] hover:text-[var(--text-secondary)] cursor-grab active:cursor-grabbing rounded-lg hover:bg-[var(--bg-elevated)]"
           title="拖拽排序"
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            onDragStart();
-          }}
-          onMouseUp={onDragEnd}
+          onClick={(e) => e.stopPropagation()}
         >
           <GripVertical size={16} />
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── 【重写】可排序列表（pointer events 实现）────────────────────
-
-function ReorderableList({
-  items,
-  onReorder,
-  renderItem,
-}: {
-  items: Project[];
-  onReorder: (fromIndex: number, toIndex: number) => void;
-  renderItem: (project: Project, index: number, isDragOver: boolean, dragHandlers: {
-    onDragStart: () => void;
-    onDragEnd: () => void;
-  }) => React.ReactNode;
-}) {
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [overIndex, setOverIndex] = useState<number | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-
-  // 使用 pointer events 追踪拖拽
-  const handlePointerMove = useCallback((e: PointerEvent) => {
-    if (dragIndex === null) return;
-    // 找到鼠标当前在哪个 item 上
-    const container = containerRef.current;
-    if (!container) return;
-    const y = e.clientY;
-    let found = -1;
-    for (let i = 0; i < itemRefs.current.length; i++) {
-      const el = itemRefs.current[i];
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      if (y >= rect.top && y <= rect.bottom) {
-        // 判断在上半还是下半
-        const mid = rect.top + rect.height / 2;
-        found = y < mid ? i : i;
-        break;
-      }
-      // 如果在两个 item 之间
-      if (y < rect.top && i > 0) {
-        found = i;
-        break;
-      }
-    }
-    // 如果在最后一个 item 下方
-    if (found === -1 && itemRefs.current.length > 0) {
-      const lastEl = itemRefs.current[itemRefs.current.length - 1];
-      if (lastEl) {
-        const rect = lastEl.getBoundingClientRect();
-        if (y > rect.bottom) found = itemRefs.current.length - 1;
-      }
-    }
-    if (found >= 0 && found !== dragIndex) {
-      setOverIndex(found);
-    } else {
-      setOverIndex(null);
-    }
-  }, [dragIndex]);
-
-  const handlePointerUp = useCallback(() => {
-    if (dragIndex !== null && overIndex !== null && dragIndex !== overIndex) {
-      onReorder(dragIndex, overIndex);
-    }
-    setDragIndex(null);
-    setOverIndex(null);
-    document.removeEventListener("pointermove", handlePointerMove);
-    document.removeEventListener("pointerup", handlePointerUp);
-    document.body.style.userSelect = "";
-    document.body.style.cursor = "";
-  }, [dragIndex, overIndex, onReorder, handlePointerMove]);
-
-  const startDrag = useCallback((index: number) => {
-    setDragIndex(index);
-    setOverIndex(null);
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "grabbing";
-    // 将在 useEffect 中注册事件
-  }, []);
-
-  // 注册/注销全局 pointer events
-  useEffect(() => {
-    if (dragIndex !== null) {
-      document.addEventListener("pointermove", handlePointerMove);
-      document.addEventListener("pointerup", handlePointerUp);
-      return () => {
-        document.removeEventListener("pointermove", handlePointerMove);
-        document.removeEventListener("pointerup", handlePointerUp);
-      };
-    }
-  }, [dragIndex, handlePointerMove, handlePointerUp]);
-
-  return (
-    <div ref={containerRef} className="flex flex-col gap-3">
-      {items.map((project, index) => {
-        const isBeingDragged = dragIndex === index;
-        const isDragOver = overIndex === index && dragIndex !== index;
-
-        return (
-          <div
-            key={project.id}
-            ref={(el) => { itemRefs.current[index] = el; }}
-            className={`transition-all duration-150 ${
-              isBeingDragged ? "opacity-40 scale-95" : ""
-            }`}
-          >
-            {/* 拖拽指示线（显示在目标项上方） */}
-            {isDragOver && dragIndex !== null && dragIndex > index && (
-              <div className="h-0.5 bg-indigo-500 rounded-full -mt-1.5 mb-1.5 mx-4 animate-pulse" />
-            )}
-
-            {renderItem(project, index, isDragOver, {
-              onDragStart: () => startDrag(index),
-              onDragEnd: () => {}, // 由全局 pointerup 处理
-            })}
-
-            {/* 拖拽指示线（显示在目标项下方） */}
-            {isDragOver && dragIndex !== null && dragIndex < index && (
-              <div className="h-0.5 bg-indigo-500 rounded-full mt-1.5 -mb-1.5 mx-4 animate-pulse" />
-            )}
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -745,15 +484,14 @@ type Dialog =
 
 export default function ProjectsPage() {
   const { projects, load, add, update, remove, reorder } = useProjectStore();
-  const {
-    eventsByDate, unscheduled, loadMonth, loadUnscheduled,
-    addEvent, addEventsBatch, batchDeleteEvents, batchCompleteEvents,
-    deleteEvent, deleteByProject,
-  } = useEventStore();
+  const { eventsByDate, unscheduled, loadMonth, loadUnscheduled, addEvent, batchDeleteEvents, batchCompleteEvents, deleteEvent, deleteByProject } = useEventStore();
   const [loaded, setLoaded] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const [localOrder, setLocalOrder] = useState<Project[]>([]);
+
+  // 拖拽状态
+  const dragIndex = useRef<number | null>(null);
 
   useEffect(() => {
     const now = new Date();
@@ -771,15 +509,27 @@ export default function ProjectsPage() {
 
   function closeDialog() { setDialog(null); }
 
-  // 【重写】拖拽排序：使用 ReorderableList + pointer events
-  async function handleReorder(fromIndex: number, toIndex: number) {
+  // ── 拖拽处理（仅手柄触发 dragStart，整个卡片可接受 dragOver）──
+
+  function handleDragStart(e: React.DragEvent, index: number) {
+    dragIndex.current = index;
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    if (dragIndex.current === null || dragIndex.current === index) return;
     const newOrder = [...localOrder];
-    const [moved] = newOrder.splice(fromIndex, 1);
-    newOrder.splice(toIndex, 0, moved);
+    const [moved] = newOrder.splice(dragIndex.current, 1);
+    newOrder.splice(index, 0, moved);
+    dragIndex.current = index;
     setLocalOrder(newOrder);
-    // 高亮被拖动的项目
-    setHighlighted(moved.id);
-    await reorder(newOrder.map((p) => p.id));
+  }
+
+  async function handleDragEnd() {
+    if (dragIndex.current === null) return;
+    dragIndex.current = null;
+    await reorder(localOrder.map((p) => p.id));
   }
 
   // ── 弹窗处理 ──
@@ -802,12 +552,11 @@ export default function ProjectsPage() {
     setHighlighted(dialog.project.id);
   }
 
-  // 【重写】批量添加：使用 addEventsBatch 单事务批量插入
-  async function handleBatchAdd(events: CalendarEvent[]) {
+  async function handleBatchAdd(titles: string[]) {
     if (dialog?.type !== "batchAdd") return;
-    await addEventsBatch(events);
-    // 刷新 unscheduled 缓存
-    await loadUnscheduled();
+    for (const title of titles) {
+      await addEvent(title, dialog.project.id, null);
+    }
     setHighlighted(dialog.project.id);
   }
 
@@ -824,8 +573,8 @@ export default function ProjectsPage() {
       {/* 标题栏 */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">项目管理</h1>
-          <p className="text-gray-500 text-sm">拖动 <GripVertical size={12} className="inline" /> 图标调整优先级顺序</p>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">项目管理</h1>
+          <p className="text-[var(--text-muted)] text-sm">拖动 <GripVertical size={12} className="inline" /> 图标调整优先级顺序</p>
         </div>
         <button
           onClick={() => setDialog({ type: "editor" })}
@@ -837,31 +586,33 @@ export default function ProjectsPage() {
 
       {/* 内容区 */}
       {!loaded ? (
-        <div className="text-gray-600 text-center py-20">加载中…</div>
+        <div className="text-[var(--text-faint)] text-center py-20">加载中…</div>
       ) : localOrder.length === 0 ? (
         <div className="text-center py-20 flex flex-col items-center gap-4">
-          <FolderOpen size={52} className="text-gray-700" />
-          <p className="text-gray-400 font-medium">还没有项目</p>
-          <p className="text-gray-600 text-sm">点击右上角「新建项目」开始</p>
+          <FolderOpen size={52} className="text-[var(--text-faintest)]" />
+          <p className="text-[var(--text-tertiary)] font-medium">还没有项目</p>
+          <p className="text-[var(--text-faint)] text-sm">点击右上角「新建项目」开始</p>
         </div>
       ) : (
-        <ReorderableList
-          items={localOrder}
-          onReorder={handleReorder}
-          renderItem={(project, _index, isDragOver, dragHandlers) => (
-            <ProjectCard
-              project={project}
-              highlighted={highlighted === project.id}
-              isDragOver={isDragOver}
-              onDragStart={dragHandlers.onDragStart}
-              onDragEnd={dragHandlers.onDragEnd}
-              onEdit={() => { setHighlighted(project.id); setDialog({ type: "editor", project }); }}
-              onAddEvent={() => { setHighlighted(project.id); setDialog({ type: "addEvent", project }); }}
-              onShowEvents={() => { setHighlighted(project.id); setDialog({ type: "events", project }); }}
-              onDelete={() => setDialog({ type: "confirmDelete", project })}
-            />
-          )}
-        />
+        <div className="flex flex-col gap-3">
+          {localOrder.map((project, index) => (
+            <div
+              key={project.id}
+              onDragOver={(e) => handleDragOver(e, index)}
+              onDragEnd={handleDragEnd}
+            >
+              <ProjectCard
+                project={project}
+                highlighted={highlighted === project.id}
+                onDragStart={(e) => handleDragStart(e, index)}
+                onEdit={() => { setHighlighted(project.id); setDialog({ type: "editor", project }); }}
+                onAddEvent={() => { setHighlighted(project.id); setDialog({ type: "addEvent", project }); }}
+                onShowEvents={() => { setHighlighted(project.id); setDialog({ type: "events", project }); }}
+                onDelete={() => setDialog({ type: "confirmDelete", project })}
+              />
+            </div>
+          ))}
+        </div>
       )}
 
       {/* 弹窗 */}

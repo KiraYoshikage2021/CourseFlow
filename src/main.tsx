@@ -7,7 +7,11 @@ import ProjectsPage from "./pages/ProjectsPage";
 import SchedulePage from "./pages/WeeklySchedulePage";
 import ImportPage from "./pages/ImportPage";
 import SettingsPage from "./pages/SettingsPage";
+import { useThemeStore } from "./store/useThemeStore";
 import "./App.css";
+
+// 在渲染前初始化主题，避免闪烁
+useThemeStore.getState().init();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

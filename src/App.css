@@ -1,1 +1,47 @@
 @import "tailwindcss";
+
+/* ═══ 主题变量 ═══ */
+
+/* 深色主题（默认） */
+:root {
+  --bg-base:       #030712;  /* gray-950  页面底色 */
+  --bg-card:       #111827;  /* gray-900  卡片/侧边栏 */
+  --bg-elevated:   #1f2937;  /* gray-800  输入框/弹窗 */
+  --bg-muted:      #374151;  /* gray-700  悬停/次级面板 */
+  --bg-subtle:     #4b5563;  /* gray-600  按钮底色 */
+  --bg-inactive:   #6b7280;  /* gray-500  非活跃 */
+
+  --text-primary:   #ffffff;
+  --text-secondary: #d1d5db;  /* gray-300 */
+  --text-tertiary:  #9ca3af;  /* gray-400 */
+  --text-muted:     #6b7280;  /* gray-500 */
+  --text-faint:     #4b5563;  /* gray-600 */
+  --text-faintest:  #374151;  /* gray-700 */
+
+  --border-default: #1f2937;  /* gray-800 */
+  --border-strong:  #374151;  /* gray-700 */
+
+  --ring-track:     #374151;  /* SVG 进度条轨道 */
+}
+
+/* 浅色主题 */
+.light {
+  --bg-base:       #f9fafb;  /* gray-50 */
+  --bg-card:       #ffffff;
+  --bg-elevated:   #f3f4f6;  /* gray-100 */
+  --bg-muted:      #e5e7eb;  /* gray-200 */
+  --bg-subtle:     #d1d5db;  /* gray-300 */
+  --bg-inactive:   #9ca3af;  /* gray-400 */
+
+  --text-primary:   #111827;  /* gray-900 */
+  --text-secondary: #374151;  /* gray-700 */
+  --text-tertiary:  #4b5563;  /* gray-600 */
+  --text-muted:     #6b7280;  /* gray-500 */
+  --text-faint:     #9ca3af;  /* gray-400 */
+  --text-faintest:  #d1d5db;  /* gray-300 */
+
+  --border-default: #e5e7eb;  /* gray-200 */
+  --border-strong:  #d1d5db;  /* gray-300 */
+
+  --ring-track:     #e5e7eb;  /* gray-200 */
+}

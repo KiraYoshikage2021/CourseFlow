@@ -2,11 +2,12 @@ import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Download, Upload, School, AlertCircle,
-  CheckCircle2, X, FileJson, Loader2,
+  CheckCircle2, X, FileJson, Loader2, Sun, Moon,
 } from "lucide-react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useWeeklyStore } from "../store/useWeeklyStore";
 import { useEventStore } from "../store/useEventStore";
+import { useThemeStore } from "../store/useThemeStore";
 
 // ── 工具 ────────────────────────────────────────────────────
 
@@ -45,12 +46,12 @@ function ConfirmDialog({
 }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <h2 className="text-lg font-semibold text-white mb-3">{title}</h2>
-        <p className="text-gray-400 text-sm mb-6 whitespace-pre-line">{description}</p>
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-3">{title}</h2>
+        <p className="text-[var(--text-tertiary)] text-sm mb-6 whitespace-pre-line">{description}</p>
         <div className="flex gap-3">
           <button onClick={onClose}
-            className="flex-1 py-2 rounded-xl bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors">
+            className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors">
             取消
           </button>
           <button onClick={onConfirm}
@@ -78,14 +79,14 @@ function SettingsItem({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="flex items-center gap-4 w-full px-5 py-4 text-left hover:bg-gray-800/50 transition-colors disabled:opacity-50 first:rounded-t-2xl last:rounded-b-2xl"
+      className="flex items-center gap-4 w-full px-5 py-4 text-left hover:bg-[var(--bg-elevated)]/50 transition-colors disabled:opacity-50 first:rounded-t-2xl last:rounded-b-2xl"
     >
       <div className="flex-shrink-0">{icon}</div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white">{title}</p>
-        <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+        <p className="text-sm font-medium text-[var(--text-primary)]">{title}</p>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">{subtitle}</p>
       </div>
-      <span className="text-gray-700 text-lg">›</span>
+      <span className="text-[var(--text-faintest)] text-lg">›</span>
     </button>
   );
 }
@@ -96,6 +97,7 @@ export default function SettingsPage() {
   const { load: loadProjects } = useProjectStore();
   const { load: loadWeekly } = useWeeklyStore();
   const { invalidateAll, loadMonth, loadUnscheduled } = useEventStore();
+  const { theme, toggle: toggleTheme } = useThemeStore();
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -199,8 +201,8 @@ export default function SettingsPage() {
         <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-indigo-600/10 mb-4">
           <School size={40} className="text-indigo-400" />
         </div>
-        <h1 className="text-2xl font-bold text-white">CourseFlow</h1>
-        <p className="text-gray-500 text-sm mt-1">Version 2.0.0 · Tauri</p>
+        <h1 className="text-2xl font-bold text-[var(--text-primary)]">CourseFlow</h1>
+        <p className="text-[var(--text-muted)] text-sm mt-1">Version 2.0.0 · Tauri</p>
       </div>
 
       {/* 全局加载遮罩 */}
@@ -228,7 +230,7 @@ export default function SettingsPage() {
           <span className="flex-1">{message.text}</span>
           <button
             onClick={() => setMessage(null)}
-            className="text-gray-500 hover:text-gray-300"
+            className="text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
           >
             <X size={14} />
           </button>
@@ -240,7 +242,7 @@ export default function SettingsPage() {
         <p className="text-sm font-semibold text-indigo-400 mb-3 px-1">
           数据安全
         </p>
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl divide-y divide-gray-800">
+        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl divide-y divide-[var(--border-default)]">
           <SettingsItem
             icon={<Download size={18} className="text-blue-400" />}
             title="备份数据"
@@ -263,7 +265,7 @@ export default function SettingsPage() {
         <p className="text-sm font-semibold text-orange-400 mb-3 px-1">
           数据迁移
         </p>
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl">
+        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl">
           <SettingsItem
             icon={<FileJson size={18} className="text-orange-400" />}
             title="导入 Flutter 版备份"
@@ -272,13 +274,30 @@ export default function SettingsPage() {
             disabled={busy}
           />
         </div>
-        <p className="text-xs text-gray-700 mt-2 px-1">
+        <p className="text-xs text-[var(--text-faintest)] mt-2 px-1">
           支持旧版导出的 yantu_backup_*.json 文件，自动转换字段格式
         </p>
       </div>
 
+      {/* 外观 */}
+      <div className="mb-10">
+        <p className="text-sm font-semibold text-purple-400 mb-3 px-1">
+          外观
+        </p>
+        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl">
+          <SettingsItem
+            icon={theme === "dark"
+              ? <Sun size={18} className="text-yellow-400" />
+              : <Moon size={18} className="text-purple-400" />}
+            title={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
+            subtitle={theme === "dark" ? "当前为深色主题" : "当前为浅色主题"}
+            onClick={toggleTheme}
+          />
+        </div>
+      </div>
+
       {/* 底部 */}
-      <p className="text-center text-gray-700 text-sm">前程似锦 ✨</p>
+      <p className="text-center text-[var(--text-faintest)] text-sm">前程似锦 ✨</p>
 
       {/* 确认弹窗 */}
       {confirm && (

@@ -66,7 +66,7 @@ function DayCard({
   const isWeekend = dayKey === "6" || dayKey === "7";
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+    <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl p-5">
       {/* 标题行 */}
       <div className="flex items-center justify-between mb-4">
         <span
@@ -78,7 +78,7 @@ function DayCard({
         >
           {dayLabel}
         </span>
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-[var(--text-faint)]">
           {selectedIds.length === 0
             ? "休息日"
             : `安排 ${selectedIds.length} 科`}
@@ -107,12 +107,12 @@ function DayCard({
               className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
                 selected
                   ? "border-current font-bold"
-                  : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-400"
+                  : "border-[var(--border-strong)] text-[var(--text-muted)] hover:border-[var(--bg-inactive)] hover:text-[var(--text-tertiary)]"
               }`}
             >
               {project.name}
               {pending > 0 && (
-                <span className={`ml-1 text-[10px] ${selected ? "opacity-70" : "text-gray-600"}`}>
+                <span className={`ml-1 text-[10px] ${selected ? "opacity-70" : "text-[var(--text-faint)]"}`}>
                   ({pending})
                 </span>
               )}
@@ -120,7 +120,7 @@ function DayCard({
           );
         })}
         {projects.length === 0 && (
-          <span className="text-xs text-gray-700">暂无项目</span>
+          <span className="text-xs text-[var(--text-faintest)]">暂无项目</span>
         )}
       </div>
     </div>
@@ -258,8 +258,8 @@ export default function WeeklySchedulePage() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
         <AlertCircle size={48} className="text-red-500" />
-        <p className="text-gray-400">加载失败</p>
-        <p className="text-gray-600 text-sm">{loadError}</p>
+        <p className="text-[var(--text-tertiary)]">加载失败</p>
+        <p className="text-[var(--text-faint)] text-sm">{loadError}</p>
         <button
           onClick={() => {
             setLoadError(null);
@@ -276,7 +276,7 @@ export default function WeeklySchedulePage() {
 
   if (!loaded || draft === null) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-600">
+      <div className="flex items-center justify-center h-full text-[var(--text-faint)]">
         加载中…
       </div>
     );
@@ -285,9 +285,9 @@ export default function WeeklySchedulePage() {
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-        <FolderOpen size={52} className="text-gray-700" />
-        <p className="text-gray-400 font-medium">还没有任何项目</p>
-        <p className="text-gray-600 text-sm">请先去「项目」页添加科目或项目</p>
+        <FolderOpen size={52} className="text-[var(--text-faintest)]" />
+        <p className="text-[var(--text-tertiary)] font-medium">还没有任何项目</p>
+        <p className="text-[var(--text-faint)] text-sm">请先去「项目」页添加科目或项目</p>
       </div>
     );
   }
@@ -305,12 +305,12 @@ export default function WeeklySchedulePage() {
       {/* 标题栏 */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">周规划配置</h1>
-          <p className="text-gray-500 text-sm">设置每天学习的科目，保存后自动分配日程</p>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">周规划配置</h1>
+          <p className="text-[var(--text-muted)] text-sm">设置每天学习的科目，保存后自动分配日程</p>
         </div>
         <button
           onClick={clearAll}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors px-3 py-2 rounded-xl hover:bg-gray-800"
+          className="flex items-center gap-1.5 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors px-3 py-2 rounded-xl hover:bg-[var(--bg-elevated)]"
           title="清空所有选中"
         >
           <Eraser size={15} />

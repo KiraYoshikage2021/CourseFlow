@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, X, Pencil, Trash2 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { useEventStore, type CalendarEvent } from "../store/useEventStore";
 import { useProjectStore, type Project } from "../store/useProjectStore";
 
 // ── 工具函数 ────────────────────────────────────────────────
 
-// 【修复】使用本地时间而非 UTC，避免时区偏移导致"今天"错位
 function toDateStr(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return d.toISOString().slice(0, 10);
 }
 
 function colorToHex(val: number) {
@@ -56,10 +51,10 @@ function MonthPicker({
 }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-72 shadow-2xl">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-72 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
-          <span className="text-white font-semibold">{year} 年</span>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">
+          <span className="text-[var(--text-primary)] font-semibold">{year} 年</span>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
             <X size={18} />
           </button>
         </div>
@@ -71,7 +66,7 @@ function MonthPicker({
               className={`py-2 rounded-xl text-sm transition-colors ${
                 currentMonth === i + 1
                   ? "bg-indigo-600 text-white font-semibold"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  : "bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
               }`}
             >
               {name}
@@ -149,11 +144,11 @@ function EventManagerDialog({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
         {/* 标题 */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-white">{parseInt(month)}月{parseInt(day)}日</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">
+          <h2 className="text-lg font-semibold text-[var(--text-primary)]">{parseInt(month)}月{parseInt(day)}日</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
             <X size={18} />
           </button>
         </div>
@@ -161,20 +156,20 @@ function EventManagerDialog({
         {/* 事件列表 */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-1 mb-4 min-h-0">
           {sorted.length === 0 && (
-            <p className="text-gray-600 text-sm text-center py-6">暂无事项</p>
+            <p className="text-[var(--text-faint)] text-sm text-center py-6">暂无事项</p>
           )}
           {sorted.map((event) => {
             const project = event.project_id ? projectMap[event.project_id] : null;
             if (editingEvent?.id === event.id) {
               // 编辑行
               return (
-                <div key={event.id} className="bg-gray-700 rounded-xl p-3 flex flex-col gap-2">
+                <div key={event.id} className="bg-[var(--bg-muted)] rounded-xl p-3 flex flex-col gap-2">
                   <input
                     autoFocus
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSaveEdit()}
-                    className="bg-gray-600 text-white rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="bg-[var(--bg-subtle)] text-[var(--text-primary)] rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                   <ProjectSelect
                     projects={projects}
@@ -184,7 +179,7 @@ function EventManagerDialog({
                   <div className="flex gap-2">
                     <button
                       onClick={() => setEditingEvent(null)}
-                      className="flex-1 py-1.5 rounded-lg bg-gray-600 text-gray-300 hover:bg-gray-500 text-sm transition-colors"
+                      className="flex-1 py-1.5 rounded-lg bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-inactive)] text-sm transition-colors"
                     >
                       取消
                     </button>
@@ -202,7 +197,7 @@ function EventManagerDialog({
             return (
               <div
                 key={event.id}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-700 group transition-colors"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--bg-muted)] group transition-colors"
               >
                 <input
                   type="checkbox"
@@ -217,23 +212,23 @@ function EventManagerDialog({
                   />
                 )}
                 <span className={`flex-1 text-sm min-w-0 truncate ${
-                  event.is_completed ? "line-through text-gray-500" : "text-gray-100"
+                  event.is_completed ? "line-through text-[var(--text-muted)]" : "text-[var(--text-primary)]"
                 }`}>
                   {event.title}
                 </span>
                 {project && (
-                  <span className="text-xs text-gray-500 hidden group-hover:inline">{project.name}</span>
+                  <span className="text-xs text-[var(--text-muted)] hidden group-hover:inline">{project.name}</span>
                 )}
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={() => startEdit(event)}
-                    className="text-gray-400 hover:text-indigo-400 p-1 rounded transition-colors"
+                    className="text-[var(--text-tertiary)] hover:text-indigo-400 p-1 rounded transition-colors"
                   >
                     <Pencil size={13} />
                   </button>
                   <button
                     onClick={() => onDelete(event.id)}
-                    className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
+                    className="text-[var(--text-tertiary)] hover:text-red-400 p-1 rounded transition-colors"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -244,14 +239,14 @@ function EventManagerDialog({
         </div>
 
         {/* 添加新事项 */}
-        <div className="border-t border-gray-700 pt-4">
+        <div className="border-t border-[var(--border-strong)] pt-4">
           <ProjectSelect projects={projects} value={newProjectId} onChange={setNewProjectId} />
           <div className="flex gap-2 mt-2">
             <input
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-              className="flex-1 bg-gray-700 text-white rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+              className="flex-1 bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="添加事项…"
             />
             <button
@@ -285,8 +280,8 @@ function ProjectSelect({
         onClick={() => onChange(null)}
         className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
           value === null
-            ? "bg-gray-500 text-white"
-            : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+            ? "bg-[var(--bg-inactive)] text-[var(--text-primary)]"
+            : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] hover:bg-[var(--bg-subtle)]"
         }`}
       >
         无
@@ -298,7 +293,7 @@ function ProjectSelect({
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors ${
             value === p.id
               ? "bg-indigo-600 text-white"
-              : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+              : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] hover:bg-[var(--bg-subtle)]"
           }`}
         >
           <div
@@ -317,12 +312,14 @@ function ProjectSelect({
 function DayCell({
   day,
   isToday,
+  isCurrentMonth,
   events,
   projectMap,
   onClick,
 }: {
   day: number;
   isToday: boolean;
+  isCurrentMonth: boolean;
   events: CalendarEvent[];
   projectMap: Record<string, Project>;
   onClick: () => void;
@@ -337,10 +334,12 @@ function DayCell({
       className={`rounded-xl p-1.5 cursor-pointer transition-colors flex flex-col min-h-[72px] border
         ${isToday
           ? "bg-green-950/40 border-green-600"
-          : "bg-gray-900 border-gray-800 hover:border-gray-600"
+          : isCurrentMonth
+          ? "bg-[var(--bg-card)] border-[var(--border-default)] hover:border-[var(--bg-subtle)]"
+          : "bg-[var(--bg-card)] border-[var(--border-default)] opacity-40"
         }`}
     >
-      <span className={`text-xs font-bold mb-1 ${isToday ? "text-green-400" : "text-gray-300"}`}>
+      <span className={`text-xs font-bold mb-1 ${isToday ? "text-green-400" : "text-[var(--text-secondary)]"}`}>
         {day}
       </span>
       <div className="flex flex-col gap-0.5 flex-1">
@@ -353,14 +352,14 @@ function DayCell({
               key={event.id}
               className="rounded px-1 py-0.5 flex items-center gap-1 min-w-0"
               style={{
-                backgroundColor: event.is_completed ? "#374151" : color + "33",
+                backgroundColor: event.is_completed ? "var(--bg-muted)" : color + "33",
                 borderLeft: isHigh && !event.is_completed ? `2px solid ${color}` : undefined,
               }}
             >
               <span
                 className="text-[10px] truncate font-semibold leading-tight"
                 style={{
-                  color: event.is_completed ? "#6b7280" : color,
+                  color: event.is_completed ? "var(--text-muted)" : color,
                   textDecoration: event.is_completed ? "line-through" : undefined,
                 }}
               >
@@ -373,7 +372,7 @@ function DayCell({
           );
         })}
         {extra > 0 && (
-          <span className="text-[9px] text-gray-600 pl-1">+{extra}</span>
+          <span className="text-[9px] text-[var(--text-faint)] pl-1">+{extra}</span>
         )}
       </div>
     </div>
@@ -390,8 +389,8 @@ function ProjectSidebar({
   projectStats: Record<string, [number, number]>;
 }) {
   return (
-    <div className="w-44 flex-shrink-0 border-r border-gray-800 pr-4 pt-2 flex flex-col gap-3">
-      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">项目进度</span>
+    <div className="w-44 flex-shrink-0 border-r border-[var(--border-default)] pr-4 pt-2 flex flex-col gap-3">
+      <span className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider">项目进度</span>
       {projects.map((p) => {
         const [total, done] = projectStats[p.id] ?? [0, 0];
         const pct = total === 0 ? 0 : Math.round((done / total) * 100);
@@ -401,7 +400,7 @@ function ProjectSidebar({
             {/* 环形进度 */}
             <div className="relative w-9 h-9 flex-shrink-0">
               <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                <circle cx="18" cy="18" r="15" fill="none" stroke="#374151" strokeWidth="3" />
+                <circle cx="18" cy="18" r="15" fill="none" stroke="var(--ring-track)" strokeWidth="3" />
                 <circle
                   cx="18" cy="18" r="15" fill="none"
                   stroke={color} strokeWidth="3" strokeOpacity="0.6"
@@ -409,23 +408,23 @@ function ProjectSidebar({
                   strokeLinecap="round"
                 />
               </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-[9px] text-gray-400 font-bold">
+              <span className="absolute inset-0 flex items-center justify-center text-[9px] text-[var(--text-tertiary)] font-bold">
                 {pct}%
               </span>
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                <span className="text-xs text-gray-300 truncate">{p.name}</span>
+                <span className="text-xs text-[var(--text-secondary)] truncate">{p.name}</span>
                 {p.difficulty === "high" && <span className="text-[10px]">🔥</span>}
               </div>
-              <span className="text-[10px] text-gray-600">{done}/{total} 完成</span>
+              <span className="text-[10px] text-[var(--text-faint)]">{done}/{total} 完成</span>
             </div>
           </div>
         );
       })}
       {projects.length === 0 && (
-        <p className="text-xs text-gray-700">暂无项目</p>
+        <p className="text-xs text-[var(--text-faintest)]">暂无项目</p>
       )}
     </div>
   );
@@ -437,14 +436,11 @@ export default function DashboardPage() {
   const { eventsByDate, loadMonth, addEvent, updateEvent, deleteEvent, toggle } = useEventStore();
   const { projects, projectMap, load: loadProjects } = useProjectStore();
 
-  const today = useMemo(() => new Date(), []);
+  const today = new Date();
   const [focusedDate, setFocusedDate] = useState(today);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [loaded, setLoaded] = useState(false);
-
-  // 【修复】用后端全量查询的项目统计，而非仅缓存数据
-  const [projectStats, setProjectStats] = useState<Record<string, [number, number]>>({});
 
   const year = focusedDate.getFullYear();
   const month = focusedDate.getMonth() + 1;
@@ -452,13 +448,7 @@ export default function DashboardPage() {
   // 切换月份时加载数据
   useEffect(() => {
     const ym = getYearMonth(focusedDate);
-    setLoaded(false);
-    Promise.all([
-      loadMonth(ym),
-      loadProjects(),
-      // 【修复】从后端获取全量项目统计
-      invoke<Record<string, [number, number]>>("get_project_stats").then(setProjectStats),
-    ]).finally(() => setLoaded(true));
+    Promise.all([loadMonth(ym), loadProjects()]).finally(() => setLoaded(true));
   }, [year, month]);
 
   function changeMonth(offset: number) {
@@ -473,6 +463,20 @@ export default function DashboardPage() {
     return { cells: { offset, daysInMonth } };
   }, [year, month]);
 
+  // 项目统计（全量事件）
+  const projectStats = useMemo(() => {
+    const stats: Record<string, [number, number]> = {};
+    for (const events of Object.values(eventsByDate)) {
+      for (const e of events) {
+        if (!e.project_id) continue;
+        if (!stats[e.project_id]) stats[e.project_id] = [0, 0];
+        stats[e.project_id][0]++;
+        if (e.is_completed) stats[e.project_id][1]++;
+      }
+    }
+    return stats;
+  }, [eventsByDate]);
+
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => a.priority - b.priority),
     [projects]
@@ -480,38 +484,28 @@ export default function DashboardPage() {
 
   const selectedDateEvents = selectedDay ? (eventsByDate[selectedDay] ?? []) : [];
 
-  // 操作事件后刷新统计
-  async function refreshStats() {
-    try {
-      const stats = await invoke<Record<string, [number, number]>>("get_project_stats");
-      setProjectStats(stats);
-    } catch (e) {
-      console.error("刷新统计失败:", e);
-    }
-  }
-
   return (
     <div className="p-6 h-full flex flex-col">
       {/* 顶部导航 */}
       <div className="flex items-center justify-between mb-5">
         <button
           onClick={() => changeMonth(-1)}
-          className="text-gray-400 hover:text-white transition-colors p-1"
+          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1"
         >
           <ChevronLeft size={22} />
         </button>
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowMonthPicker(true)}
-            className="text-2xl font-bold text-white hover:text-indigo-400 transition-colors"
+            className="text-2xl font-bold text-[var(--text-primary)] hover:text-indigo-400 transition-colors"
           >
             {MONTH_NAMES[month - 1]}
           </button>
-          <span className="text-2xl font-light text-gray-500">{year}</span>
+          <span className="text-2xl font-light text-[var(--text-muted)]">{year}</span>
         </div>
         <button
           onClick={() => changeMonth(1)}
-          className="text-gray-400 hover:text-white transition-colors p-1"
+          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1"
         >
           <ChevronRight size={22} />
         </button>
@@ -527,7 +521,7 @@ export default function DashboardPage() {
           {/* 星期头 */}
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {WEEK_DAYS.map((d) => (
-              <div key={d} className="text-center text-xs font-bold text-gray-600 py-1">
+              <div key={d} className="text-center text-xs font-bold text-[var(--text-faint)] py-1">
                 {d}
               </div>
             ))}
@@ -535,7 +529,7 @@ export default function DashboardPage() {
 
           {/* 日期格子 */}
           {!loaded ? (
-            <div className="flex-1 flex items-center justify-center text-gray-600">加载中…</div>
+            <div className="flex-1 flex items-center justify-center text-[var(--text-faint)]">加载中…</div>
           ) : (
             <div className="grid grid-cols-7 gap-1.5 flex-1 auto-rows-fr">
               {/* 偏移空格 */}
@@ -552,6 +546,7 @@ export default function DashboardPage() {
                     key={dateStr}
                     day={dayNum}
                     isToday={isToday}
+                    isCurrentMonth={true}
                     events={eventsByDate[dateStr] ?? []}
                     projectMap={projectMap}
                     onClick={() => setSelectedDay(dateStr)}
@@ -581,22 +576,10 @@ export default function DashboardPage() {
           projects={sortedProjects}
           projectMap={projectMap}
           onClose={() => setSelectedDay(null)}
-          onAdd={async (title, projectId) => {
-            await addEvent(title, projectId, selectedDay);
-            refreshStats();
-          }}
-          onToggle={(id) => {
-            toggle(id, selectedDay);
-            refreshStats();
-          }}
-          onEdit={async (event, title, projectId) => {
-            await updateEvent(event.id, selectedDay, title, projectId);
-            refreshStats();
-          }}
-          onDelete={(id) => {
-            deleteEvent(id, selectedDay);
-            refreshStats();
-          }}
+          onAdd={(title, projectId) => addEvent(title, projectId, selectedDay)}
+          onToggle={(id) => toggle(id, selectedDay)}
+          onEdit={(event, title, projectId) => updateEvent(event.id, selectedDay, title, projectId)}
+          onDelete={(id) => deleteEvent(id, selectedDay)}
         />
       )}
     </div>

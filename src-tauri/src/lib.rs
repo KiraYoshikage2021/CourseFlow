@@ -30,6 +30,7 @@ pub fn run() {
             add_events_batch,
             batch_delete_events,
             batch_complete_events,
+            batch_uncomplete_events,
             toggle_event_complete,
             delete_events_by_project,
             get_weekly_template,

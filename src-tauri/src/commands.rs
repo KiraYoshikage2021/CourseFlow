@@ -368,6 +368,22 @@ pub async fn batch_complete_events(
     tx.commit().await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn batch_uncomplete_events(
+    pool: State<'_, SqlitePool>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    for id in &ids {
+        sqlx::query("UPDATE calendar_events SET is_completed=0 WHERE id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
 /// 新增：查询每个项目的全量统计（total, completed）
 #[tauri::command]
 pub async fn get_project_stats(

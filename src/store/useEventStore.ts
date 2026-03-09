@@ -19,16 +19,15 @@ interface EventStore {
   loadMonth: (yearMonth: string) => Promise<void>;
   loadUnscheduled: () => Promise<void>;
   addEvent: (title: string, projectId: string | null, date?: string | null) => Promise<void>;
+  addEventsBatch: (events: CalendarEvent[]) => Promise<void>;
   updateEvent: (id: string, date: string | null, title: string, projectId: string | null) => Promise<void>;
   deleteEvent: (id: string, date: string | null) => Promise<void>;
   batchDeleteEvents: (ids: string[]) => Promise<void>;
   batchCompleteEvents: (ids: string[]) => Promise<void>;
+  batchUncompleteEvents: (ids: string[]) => Promise<void>;
+  invalidateAll: () => void;
   toggle: (id: string, date: string | null) => Promise<void>;
   deleteByProject: (projectId: string) => Promise<void>;
-  /** 批量插入事件（一个事务），用于批量添加日程 */
-  addEventsBatch: (events: CalendarEvent[]) => Promise<number>;
-  /** 清空所有缓存，重排后调用 */
-  invalidateAll: () => void;
 }
 
 export const useEventStore = create<EventStore>((set, get) => ({
@@ -62,19 +61,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
         if (!grouped[event.date]) grouped[event.date] = [];
         grouped[event.date].push(event);
       }
-
-      // 【修复】先清除该月份已缓存的旧 key，再合并新数据
-      // 避免重排后旧日期缓存残留
-      set((s) => {
-        const cleaned: Record<string, CalendarEvent[]> = {};
-        for (const [date, evts] of Object.entries(s.eventsByDate)) {
-          // 保留不属于当前月份的缓存
-          if (!date.startsWith(yearMonth)) {
-            cleaned[date] = evts;
-          }
-        }
-        return { eventsByDate: { ...cleaned, ...grouped } };
-      });
+      set((s) => ({ eventsByDate: { ...s.eventsByDate, ...grouped } }));
     } catch (e) {
       console.error("loadMonth 失败:", e);
     }
@@ -89,14 +76,10 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  // 【修复】date 显式默认 null，避免 undefined 传给 Rust
+  // date 不传或传 null 时，事件进入 unscheduled
   addEvent: async (title, projectId, date = null) => {
     try {
-      const event = await invoke<CalendarEvent>("add_event", {
-        title,
-        projectId,
-        date: date ?? null, // 确保 undefined 也变成 null
-      });
+      const event = await invoke<CalendarEvent>("add_event", { title, projectId, date });
       if (event.date) {
         set((s) => ({
           eventsByDate: {
@@ -109,6 +92,28 @@ export const useEventStore = create<EventStore>((set, get) => ({
       }
     } catch (e) {
       console.error("add_event 失败:", e);
+      throw e;
+    }
+  },
+
+  addEventsBatch: async (events) => {
+    try {
+      await invoke("add_events_batch", { events });
+      // 更新本地缓存
+      set((s) => {
+        const updated = { ...s.eventsByDate };
+        const newUnscheduled = [...s.unscheduled];
+        for (const event of events) {
+          if (event.date) {
+            updated[event.date] = [...(updated[event.date] ?? []), event];
+          } else {
+            newUnscheduled.push(event);
+          }
+        }
+        return { eventsByDate: updated, unscheduled: newUnscheduled };
+      });
+    } catch (e) {
+      console.error("add_events_batch 失败:", e);
       throw e;
     }
   },
@@ -204,6 +209,30 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
+  batchUncompleteEvents: async (ids) => {
+    const idSet = new Set(ids);
+    set((s) => {
+      const updated: Record<string, CalendarEvent[]> = {};
+      for (const [date, events] of Object.entries(s.eventsByDate)) {
+        updated[date] = events.map((e) =>
+          idSet.has(e.id) ? { ...e, is_completed: false } : e
+        );
+      }
+      return {
+        eventsByDate: updated,
+        unscheduled: s.unscheduled.map((e) =>
+          idSet.has(e.id) ? { ...e, is_completed: false } : e
+        ),
+      };
+    });
+    try {
+      await invoke("batch_uncomplete_events", { ids });
+    } catch (e) {
+      console.error("batch_uncomplete_events 失败:", e);
+      throw e;
+    }
+  },
+
   toggle: async (id, date) => {
     const toggle = (e: CalendarEvent) =>
       e.id === id ? { ...e, is_completed: !e.is_completed } : e;
@@ -235,52 +264,21 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  // 【修复】添加 try-catch 错误处理
   deleteByProject: async (projectId) => {
-    try {
-      await invoke("delete_events_by_project", { projectId });
-      set((s) => {
-        const updated: Record<string, CalendarEvent[]> = {};
-        for (const [date, events] of Object.entries(s.eventsByDate)) {
-          updated[date] = events.filter((e) => e.project_id !== projectId);
-        }
-        return {
-          eventsByDate: updated,
-          unscheduled: s.unscheduled.filter((e) => e.project_id !== projectId),
-        };
-      });
-    } catch (e) {
-      console.error("delete_events_by_project 失败:", e);
-      throw e;
-    }
-  },
-
-  // 【新增】批量插入事件，使用后端 add_events_batch 命令（单事务）
-  addEventsBatch: async (events) => {
-    try {
-      const count = await invoke<number>("add_events_batch", { events });
-      // 按 date 分组更新缓存
-      for (const event of events) {
-        if (event.date) {
-          set((s) => ({
-            eventsByDate: {
-              ...s.eventsByDate,
-              [event.date!]: [...(s.eventsByDate[event.date!] ?? []), event],
-            },
-          }));
-        } else {
-          set((s) => ({ unscheduled: [...s.unscheduled, event] }));
-        }
+    await invoke("delete_events_by_project", { projectId });
+    set((s) => {
+      const updated: Record<string, CalendarEvent[]> = {};
+      for (const [date, events] of Object.entries(s.eventsByDate)) {
+        updated[date] = events.filter((e) => e.project_id !== projectId);
       }
-      return count;
-    } catch (e) {
-      console.error("add_events_batch 失败:", e);
-      throw e;
-    }
+      return {
+        eventsByDate: updated,
+        unscheduled: s.unscheduled.filter((e) => e.project_id !== projectId),
+      };
+    });
   },
 
-  // 【新增】清空所有缓存，供重排后强制刷新
   invalidateAll: () => {
-    set({ eventsByDate: {}, unscheduled: [] });
+    set({ eventsByDate: {}, unscheduled: [], loadingDates: new Set() });
   },
 }));

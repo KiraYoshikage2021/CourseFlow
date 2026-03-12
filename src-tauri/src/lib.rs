@@ -32,6 +32,7 @@ pub fn run() {
             batch_complete_events,
             batch_uncomplete_events,
             toggle_event_complete,
+            toggle_event_pinned,
             delete_events_by_project,
             get_weekly_template,
             save_weekly_template,
@@ -40,6 +41,12 @@ pub fn run() {
             export_backup,
             import_backup,
             import_flutter_backup,
+            get_habits,
+            add_habit,
+            update_habit,
+            delete_habit,
+            toggle_habit_completion,
+            get_habit_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { LayoutDashboard, FolderKanban, CalendarDays, FileJson, Settings, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, FolderKanban, CalendarDays, Flame, FileJson, Settings, Sun, Moon } from "lucide-react";
 import { useThemeStore } from "../store/useThemeStore";
 
 const navItems = [
   { to: "/dashboard", icon: LayoutDashboard, label: "总览" },
   { to: "/projects",  icon: FolderKanban,    label: "项目" },
   { to: "/schedule",  icon: CalendarDays,    label: "周计划" },
+  { to: "/habits",    icon: Flame,           label: "习惯" },
   { to: "/import",    icon: FileJson,        label: "导入" },
   { to: "/settings",  icon: Settings,        label: "设置" },
 ];

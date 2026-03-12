@@ -239,6 +239,7 @@ function BatchAddDialog({
           date,
           created_at: now,
           is_completed: false,
+          is_pinned: false,
           project_id: project.id,
         });
       }

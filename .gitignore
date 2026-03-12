@@ -31,3 +31,6 @@ src-tauri/target/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Claude Code
+.claude/

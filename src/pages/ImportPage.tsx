@@ -334,6 +334,7 @@ export default function ImportPage() {
         date: e.date,
         created_at: now,
         is_completed: false,
+        is_pinned: false,
         project_id: e.project_id,
       }));
       await invoke("add_events_batch", { events: payload });

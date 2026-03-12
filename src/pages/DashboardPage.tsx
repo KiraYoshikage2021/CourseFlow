@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, X, Pencil, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Pencil, Trash2, Lock, LockOpen } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useEventStore, type CalendarEvent } from "../store/useEventStore";
 import { useProjectStore, type Project } from "../store/useProjectStore";
 
@@ -17,12 +18,13 @@ function getYearMonth(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// 按难度(高→低) + 项目优先级 排序，与 Flutter 逻辑一致
+// 按完成状态(未完成优先) + 难度(高→低) + 项目优先级 排序
 function compareEvents(
   a: CalendarEvent,
   b: CalendarEvent,
   projectMap: Record<string, Project>
 ) {
+  if (a.is_completed !== b.is_completed) return a.is_completed ? 1 : -1;
   const diffOrder = { high: 2, medium: 1, low: 0 };
   const pA = a.project_id ? projectMap[a.project_id] : null;
   const pB = b.project_id ? projectMap[b.project_id] : null;
@@ -46,14 +48,29 @@ function MonthPicker({
 }: {
   year: number;
   currentMonth: number;
-  onSelect: (month: number) => void;
+  onSelect: (year: number, month: number) => void;
   onClose: () => void;
 }) {
+  const [pickerYear, setPickerYear] = useState(year);
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
       <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-72 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
-          <span className="text-[var(--text-primary)] font-semibold">{year} 年</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPickerYear((y) => y - 1)}
+              className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span className="text-[var(--text-primary)] font-semibold">{pickerYear} 年</span>
+            <button
+              onClick={() => setPickerYear((y) => y + 1)}
+              className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
           <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
             <X size={18} />
           </button>
@@ -62,9 +79,9 @@ function MonthPicker({
           {MONTH_NAMES.map((name, i) => (
             <button
               key={i}
-              onClick={() => { onSelect(i + 1); onClose(); }}
+              onClick={() => { onSelect(pickerYear, i + 1); onClose(); }}
               className={`py-2 rounded-xl text-sm transition-colors ${
-                currentMonth === i + 1
+                pickerYear === year && currentMonth === i + 1
                   ? "bg-indigo-600 text-white font-semibold"
                   : "bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
               }`}
@@ -88,6 +105,7 @@ function EventManagerDialog({
   onClose,
   onAdd,
   onToggle,
+  onPin,
   onEdit,
   onDelete,
 }: {
@@ -98,6 +116,7 @@ function EventManagerDialog({
   onClose: () => void;
   onAdd: (title: string, projectId: string | null) => Promise<void>;
   onToggle: (id: string) => void;
+  onPin: (id: string) => void;
   onEdit: (event: CalendarEvent, title: string, projectId: string | null) => Promise<void>;
   onDelete: (id: string) => void;
 }) {
@@ -140,7 +159,10 @@ function EventManagerDialog({
     }
   }
 
-  const sorted = [...events].sort((a, b) => compareEvents(a, b, projectMap));
+  const sorted = useMemo(
+    () => [...events].sort((a, b) => compareEvents(a, b, projectMap)),
+    [events, projectMap]
+  );
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
@@ -219,6 +241,17 @@ function EventManagerDialog({
                 {project && (
                   <span className="text-xs text-[var(--text-muted)] hidden group-hover:inline">{project.name}</span>
                 )}
+                <button
+                  onClick={() => onPin(event.id)}
+                  title={event.is_pinned ? "取消锁定" : "锁定日期"}
+                  className={`p-1 rounded transition-colors flex-shrink-0 ${
+                    event.is_pinned
+                      ? "text-amber-400"
+                      : "opacity-0 group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-amber-400"
+                  }`}
+                >
+                  {event.is_pinned ? <Lock size={13} /> : <LockOpen size={13} />}
+                </button>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={() => startEdit(event)}
@@ -324,7 +357,10 @@ function DayCell({
   projectMap: Record<string, Project>;
   onClick: () => void;
 }) {
-  const sorted = [...events].sort((a, b) => compareEvents(a, b, projectMap));
+  const sorted = useMemo(
+    () => [...events].sort((a, b) => compareEvents(a, b, projectMap)),
+    [events, projectMap]
+  );
   const visible = sorted.slice(0, 2);
   const extra = sorted.length - 2;
 
@@ -367,6 +403,9 @@ function DayCell({
               </span>
               {isHigh && !event.is_completed && (
                 <span className="text-[9px] flex-shrink-0">🔥</span>
+              )}
+              {event.is_pinned && (
+                <span className="text-[9px] flex-shrink-0">📌</span>
               )}
             </div>
           );
@@ -433,7 +472,7 @@ function ProjectSidebar({
 // ── 主页面 ───────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { eventsByDate, loadMonth, addEvent, updateEvent, deleteEvent, toggle } = useEventStore();
+  const { eventsByDate, loadMonth, addEvent, updateEvent, deleteEvent, toggle, pin } = useEventStore();
   const { projects, projectMap, load: loadProjects } = useProjectStore();
 
   const today = new Date();
@@ -441,6 +480,7 @@ export default function DashboardPage() {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [projectStats, setProjectStats] = useState<Record<string, [number, number]>>({});
 
   const year = focusedDate.getFullYear();
   const month = focusedDate.getMonth() + 1;
@@ -448,7 +488,11 @@ export default function DashboardPage() {
   // 切换月份时加载数据
   useEffect(() => {
     const ym = getYearMonth(focusedDate);
-    Promise.all([loadMonth(ym), loadProjects()]).finally(() => setLoaded(true));
+    Promise.all([
+      loadMonth(ym),
+      loadProjects(),
+      invoke<Record<string, [number, number]>>("get_project_stats").then(setProjectStats),
+    ]).finally(() => setLoaded(true));
   }, [year, month]);
 
   function changeMonth(offset: number) {
@@ -462,20 +506,6 @@ export default function DashboardPage() {
     const offset = (firstDay.getDay() + 6) % 7; // 周一为起始
     return { cells: { offset, daysInMonth } };
   }, [year, month]);
-
-  // 项目统计（全量事件）
-  const projectStats = useMemo(() => {
-    const stats: Record<string, [number, number]> = {};
-    for (const events of Object.values(eventsByDate)) {
-      for (const e of events) {
-        if (!e.project_id) continue;
-        if (!stats[e.project_id]) stats[e.project_id] = [0, 0];
-        stats[e.project_id][0]++;
-        if (e.is_completed) stats[e.project_id][1]++;
-      }
-    }
-    return stats;
-  }, [eventsByDate]);
 
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => a.priority - b.priority),
@@ -563,7 +593,7 @@ export default function DashboardPage() {
         <MonthPicker
           year={year}
           currentMonth={month}
-          onSelect={(m) => setFocusedDate(new Date(year, m - 1, 1))}
+          onSelect={(y, m) => setFocusedDate(new Date(y, m - 1, 1))}
           onClose={() => setShowMonthPicker(false)}
         />
       )}
@@ -578,6 +608,7 @@ export default function DashboardPage() {
           onClose={() => setSelectedDay(null)}
           onAdd={(title, projectId) => addEvent(title, projectId, selectedDay)}
           onToggle={(id) => toggle(id, selectedDay)}
+          onPin={(id) => pin(id, selectedDay)}
           onEdit={(event, title, projectId) => updateEvent(event.id, selectedDay, title, projectId)}
           onDelete={(id) => deleteEvent(id, selectedDay)}
         />

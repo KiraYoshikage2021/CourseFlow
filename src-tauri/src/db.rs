@@ -70,6 +70,30 @@ async fn migrate_calendar_events_date_nullable(pool: &SqlitePool) {
     println!("[迁移] calendar_events 表重建完成，date 列现在允许 NULL");
 }
 
+/// 迁移：为已有数据库添加 is_pinned 列（SQLite 支持 ADD COLUMN）
+async fn migrate_add_is_pinned(pool: &SqlitePool) {
+    let rows = sqlx::query("PRAGMA table_info(calendar_events)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let has_column = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "is_pinned"
+    });
+
+    if has_column {
+        return;
+    }
+
+    println!("[迁移] calendar_events 缺少 is_pinned 列，正在添加…");
+    sqlx::query("ALTER TABLE calendar_events ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await
+        .expect("迁移：添加 is_pinned 列失败");
+    println!("[迁移] is_pinned 列添加完成");
+}
+
 pub async fn init_db() -> SqlitePool {
     let db_path = get_db_path();
     let db_url = format!("sqlite:{}", db_path);
@@ -103,6 +127,7 @@ pub async fn init_db() -> SqlitePool {
             date         TEXT,
             created_at   TEXT NOT NULL,
             is_completed INTEGER NOT NULL DEFAULT 0,
+            is_pinned    INTEGER NOT NULL DEFAULT 0,
             project_id   TEXT REFERENCES projects(id) ON DELETE SET NULL
         )",
     )
@@ -113,10 +138,40 @@ pub async fn init_db() -> SqlitePool {
     // 迁移：如果 date 列有 NOT NULL 约束（旧版 schema），则重建表以允许 NULL
     migrate_calendar_events_date_nullable(&pool).await;
 
+    // 迁移：为旧数据库添加 is_pinned 列
+    migrate_add_is_pinned(&pool).await;
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_date ON calendar_events(date)")
         .execute(&pool)
         .await
         .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS habits (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            color_value INTEGER NOT NULL,
+            days_of_week TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            is_active   INTEGER NOT NULL DEFAULT 1
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS habit_completions (
+            id          TEXT PRIMARY KEY,
+            habit_id    TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+            date        TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            UNIQUE(habit_id, date)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS weekly_template (

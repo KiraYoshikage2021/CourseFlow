@@ -7,6 +7,7 @@ export interface CalendarEvent {
   date: string | null;         // null = 待分配（未绑定日期）
   created_at: string;
   is_completed: boolean;
+  is_pinned: boolean;
   project_id: string | null;
 }
 
@@ -27,6 +28,7 @@ interface EventStore {
   batchUncompleteEvents: (ids: string[]) => Promise<void>;
   invalidateAll: () => void;
   toggle: (id: string, date: string | null) => Promise<void>;
+  pin: (id: string, date: string | null) => Promise<void>;
   deleteByProject: (projectId: string) => Promise<void>;
 }
 
@@ -250,6 +252,37 @@ export const useEventStore = create<EventStore>((set, get) => ({
       await invoke("toggle_event_complete", { id });
     } catch (e) {
       console.error("toggle 失败:", e);
+      // 回滚
+      if (date) {
+        set((s) => ({
+          eventsByDate: {
+            ...s.eventsByDate,
+            [date]: (s.eventsByDate[date] ?? []).map(toggle),
+          },
+        }));
+      } else {
+        set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
+      }
+    }
+  },
+
+  pin: async (id, date) => {
+    const toggle = (e: CalendarEvent) =>
+      e.id === id ? { ...e, is_pinned: !e.is_pinned } : e;
+    if (date) {
+      set((s) => ({
+        eventsByDate: {
+          ...s.eventsByDate,
+          [date]: (s.eventsByDate[date] ?? []).map(toggle),
+        },
+      }));
+    } else {
+      set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
+    }
+    try {
+      await invoke("toggle_event_pinned", { id });
+    } catch (e) {
+      console.error("toggle_event_pinned 失败:", e);
       // 回滚
       if (date) {
         set((s) => ({

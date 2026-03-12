@@ -374,14 +374,12 @@ function HistoryModal({
 
 function HabitCard({
   habit,
-  today,
   onToggle,
   onEdit,
   onDelete,
   onHistory,
 }: {
   habit: HabitWithStats;
-  today: string;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -458,7 +456,7 @@ function HabitCard({
 // ── 主页面 ───────────────────────────────────────────────────
 
 export default function HabitsPage() {
-  const { habits, loading, load, add, update, remove, toggle } = useHabitStore();
+  const { habits, load, add, update, remove, toggle } = useHabitStore();
   const [loaded, setLoaded] = useState(false);
   const [dialog, setDialog] = useState<
     | { type: "add" }
@@ -524,7 +522,6 @@ export default function HabitsPage() {
                   <HabitCard
                     key={h.id}
                     habit={h}
-                    today={today}
                     onToggle={() => toggle(h.id, today)}
                     onEdit={() => setDialog({ type: "edit", habit: h })}
                     onDelete={() => remove(h.id)}
@@ -545,7 +542,6 @@ export default function HabitsPage() {
                   <HabitCard
                     key={h.id}
                     habit={h}
-                    today={today}
                     onToggle={() => toggle(h.id, today)}
                     onEdit={() => setDialog({ type: "edit", habit: h })}
                     onDelete={() => remove(h.id)}

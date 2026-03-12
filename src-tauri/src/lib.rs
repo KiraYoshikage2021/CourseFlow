@@ -11,7 +11,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            let pool = tauri::async_runtime::block_on(db::init_db());
+            let app_data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
+            std::fs::create_dir_all(&app_data_dir).expect("无法创建应用数据目录");
+            let db_path = app_data_dir.join("courseflow_data.db").to_string_lossy().to_string();
+            let pool = tauri::async_runtime::block_on(db::init_db(&db_path));
             app.manage(pool);
             Ok(())
         })

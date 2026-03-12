@@ -1,11 +1,6 @@
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::str::FromStr;
 
-pub fn get_db_path() -> String {
-    let exe_path = std::env::current_exe().expect("无法获取可执行文件路径");
-    let dir = exe_path.parent().expect("无法获取父目录");
-    dir.join("courseflow_data.db").to_string_lossy().to_string()
-}
 
 /// 迁移：确保 calendar_events.date 列允许 NULL
 /// SQLite 不支持 ALTER COLUMN，需要重建表
@@ -94,8 +89,7 @@ async fn migrate_add_is_pinned(pool: &SqlitePool) {
     println!("[迁移] is_pinned 列添加完成");
 }
 
-pub async fn init_db() -> SqlitePool {
-    let db_path = get_db_path();
+pub async fn init_db(db_path: &str) -> SqlitePool {
     let db_url = format!("sqlite:{}", db_path);
 
     let options = SqliteConnectOptions::from_str(&db_url)

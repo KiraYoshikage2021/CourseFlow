@@ -15,6 +15,20 @@ pub struct Project {
     pub color_value: i64,
     pub priority: i64,
     pub difficulty: Difficulty,
+    pub is_archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MilestoneWithStats {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub sort_order: i64,
+    pub status: String,
+    pub target_date: Option<String>,
+    pub created_at: String,
+    pub total: i64,
+    pub done: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,9 +48,21 @@ pub struct HabitWithStats {
 pub struct CalendarEvent {
     pub id: String,
     pub title: String,
-    pub date: Option<String>, // None = 待分配（未绑定日期）
+    pub date: Option<String>,     // scheduled date; None = 待分配
+    pub due_date: Option<String>, // deadline / target completion date
     pub created_at: String,
+    pub completed_at: Option<String>,
     pub is_completed: bool,
     pub is_pinned: bool,
     pub project_id: Option<String>,
+    pub milestone_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RescheduleChange {
+    pub id: String,
+    pub title: String,
+    pub project_id: String,
+    pub old_date: Option<String>,
+    pub new_date: Option<String>,
 }

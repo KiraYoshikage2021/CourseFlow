@@ -1,13 +1,28 @@
 use crate::models::*;
 use chrono::Datelike;
-use sqlx::{Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use tauri::State;
 use uuid::Uuid;
+
+fn row_to_calendar_event(r: &SqliteRow) -> CalendarEvent {
+    CalendarEvent {
+        id: r.get("id"),
+        title: r.get("title"),
+        date: r.get("date"),
+        due_date: r.get("due_date"),
+        created_at: r.get("created_at"),
+        completed_at: r.get("completed_at"),
+        is_completed: r.get::<i64, _>("is_completed") != 0,
+        is_pinned: r.get::<i64, _>("is_pinned") != 0,
+        project_id: r.get("project_id"),
+        milestone_id: r.get("milestone_id"),
+    }
+}
 
 #[tauri::command]
 pub async fn get_projects(pool: State<'_, SqlitePool>) -> Result<Vec<Project>, String> {
     let rows = sqlx::query(
-        "SELECT id, name, color_value, priority, difficulty FROM projects ORDER BY priority ASC",
+        "SELECT id, name, color_value, priority, difficulty, is_archived FROM projects ORDER BY priority ASC",
     )
     .fetch_all(pool.inner())
     .await
@@ -25,6 +40,7 @@ pub async fn get_projects(pool: State<'_, SqlitePool>) -> Result<Vec<Project>, S
                 "medium" => Difficulty::Medium,
                 _ => Difficulty::Low,
             },
+            is_archived: r.get::<i64, _>("is_archived") != 0,
         })
         .collect())
 }
@@ -50,7 +66,7 @@ pub async fn add_project(
         .to_string();
 
     sqlx::query(
-        "INSERT INTO projects (id, name, color_value, priority, difficulty) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO projects (id, name, color_value, priority, difficulty, is_archived) VALUES (?, ?, ?, ?, ?, 0)",
     )
     .bind(&id)
     .bind(&name)
@@ -67,6 +83,7 @@ pub async fn add_project(
         color_value,
         priority: count,
         difficulty,
+        is_archived: false,
     })
 }
 
@@ -96,7 +113,38 @@ pub async fn update_project(
 
 #[tauri::command]
 pub async fn delete_project(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE calendar_events SET milestone_id=NULL WHERE project_id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM milestones WHERE project_id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM projects WHERE id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn archive_project(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
+    sqlx::query("UPDATE projects SET is_archived=1 WHERE id=?")
+        .bind(&id)
+        .execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn restore_project(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
+    sqlx::query("UPDATE projects SET is_archived=0 WHERE id=?")
         .bind(&id)
         .execute(pool.inner())
         .await
@@ -119,28 +167,148 @@ pub async fn reorder_projects(pool: State<'_, SqlitePool>, ids: Vec<String>) -> 
 }
 
 #[tauri::command]
+pub async fn get_milestones(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> Result<Vec<MilestoneWithStats>, String> {
+    let rows = sqlx::query(
+        "SELECT m.id, m.project_id, m.name, m.sort_order, m.status, m.target_date, m.created_at,
+                COUNT(e.id) as total,
+                COALESCE(SUM(e.is_completed), 0) as done
+         FROM milestones m
+         LEFT JOIN calendar_events e ON e.milestone_id = m.id
+         WHERE m.project_id = ?
+         GROUP BY m.id, m.project_id, m.name, m.sort_order, m.status, m.target_date, m.created_at
+         ORDER BY m.sort_order ASC, m.created_at ASC",
+    )
+    .bind(&project_id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows
+        .iter()
+        .map(|r| MilestoneWithStats {
+            id: r.get("id"),
+            project_id: r.get("project_id"),
+            name: r.get("name"),
+            sort_order: r.get("sort_order"),
+            status: r.get("status"),
+            target_date: r.get("target_date"),
+            created_at: r.get("created_at"),
+            total: r.get("total"),
+            done: r.get("done"),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn add_milestone(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+    name: String,
+    target_date: Option<String>,
+) -> Result<MilestoneWithStats, String> {
+    let id = Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let count: i64 = sqlx::query("SELECT COUNT(*) as count FROM milestones WHERE project_id=?")
+        .bind(&project_id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?
+        .get("count");
+
+    sqlx::query(
+        "INSERT INTO milestones (id, project_id, name, sort_order, status, target_date, created_at)
+         VALUES (?, ?, ?, ?, 'not_started', ?, ?)",
+    )
+    .bind(&id)
+    .bind(&project_id)
+    .bind(&name)
+    .bind(count)
+    .bind(&target_date)
+    .bind(&created_at)
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(MilestoneWithStats {
+        id,
+        project_id,
+        name,
+        sort_order: count,
+        status: "not_started".to_string(),
+        target_date,
+        created_at,
+        total: 0,
+        done: 0,
+    })
+}
+
+#[tauri::command]
+pub async fn update_milestone(
+    pool: State<'_, SqlitePool>,
+    id: String,
+    name: String,
+    status: String,
+    target_date: Option<String>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE milestones SET name=?, status=?, target_date=? WHERE id=?")
+        .bind(&name)
+        .bind(&status)
+        .bind(&target_date)
+        .bind(&id)
+        .execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_milestone(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE calendar_events SET milestone_id=NULL WHERE milestone_id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM milestones WHERE id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reorder_milestones(
+    pool: State<'_, SqlitePool>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    for (i, id) in ids.iter().enumerate() {
+        sqlx::query("UPDATE milestones SET sort_order=? WHERE id=?")
+            .bind(i as i64)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_events_by_date(
     pool: State<'_, SqlitePool>,
     date: String,
 ) -> Result<Vec<CalendarEvent>, String> {
-    let rows = sqlx::query("SELECT id, title, date, created_at, is_completed, is_pinned, project_id FROM calendar_events WHERE date=? ORDER BY created_at")
+    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date=? ORDER BY created_at")
         .bind(&date)
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(rows
-        .iter()
-        .map(|r| CalendarEvent {
-            id: r.get("id"),
-            title: r.get("title"),
-            date: r.get("date"),
-            created_at: r.get("created_at"),
-            is_completed: r.get::<i64, _>("is_completed") != 0,
-            is_pinned: r.get::<i64, _>("is_pinned") != 0,
-            project_id: r.get("project_id"),
-        })
-        .collect())
+    Ok(rows.iter().map(row_to_calendar_event).collect())
 }
 
 #[tauri::command]
@@ -149,24 +317,13 @@ pub async fn get_events_by_month(
     year_month: String,
 ) -> Result<Vec<CalendarEvent>, String> {
     let pattern = format!("{}%", year_month);
-    let rows = sqlx::query("SELECT id, title, date, created_at, is_completed, is_pinned, project_id FROM calendar_events WHERE date LIKE ? ORDER BY date, created_at")
+    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date LIKE ? ORDER BY date, created_at")
         .bind(&pattern)
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(rows
-        .iter()
-        .map(|r| CalendarEvent {
-            id: r.get("id"),
-            title: r.get("title"),
-            date: r.get("date"),
-            created_at: r.get("created_at"),
-            is_completed: r.get::<i64, _>("is_completed") != 0,
-            is_pinned: r.get::<i64, _>("is_pinned") != 0,
-            project_id: r.get("project_id"),
-        })
-        .collect())
+    Ok(rows.iter().map(row_to_calendar_event).collect())
 }
 
 #[tauri::command]
@@ -174,24 +331,58 @@ pub async fn get_unscheduled_events(
     pool: State<'_, SqlitePool>,
 ) -> Result<Vec<CalendarEvent>, String> {
     let rows = sqlx::query(
-        "SELECT id, title, date, created_at, is_completed, is_pinned, project_id FROM calendar_events WHERE date IS NULL ORDER BY created_at",
+        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date IS NULL ORDER BY created_at",
     )
     .fetch_all(pool.inner())
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows
-        .iter()
-        .map(|r| CalendarEvent {
-            id: r.get("id"),
-            title: r.get("title"),
-            date: r.get("date"),
-            created_at: r.get("created_at"),
-            is_completed: r.get::<i64, _>("is_completed") != 0,
-            is_pinned: r.get::<i64, _>("is_pinned") != 0,
-            project_id: r.get("project_id"),
-        })
-        .collect())
+    Ok(rows.iter().map(row_to_calendar_event).collect())
+}
+
+#[tauri::command]
+pub async fn get_events_by_project(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> Result<Vec<CalendarEvent>, String> {
+    let rows = sqlx::query(
+        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id
+         FROM calendar_events
+         WHERE project_id=?
+         ORDER BY date IS NULL, date, created_at",
+    )
+    .bind(&project_id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows.iter().map(row_to_calendar_event).collect())
+}
+
+#[tauri::command]
+pub async fn get_overdue_events(
+    pool: State<'_, SqlitePool>,
+    today: String,
+) -> Result<Vec<CalendarEvent>, String> {
+    let rows = sqlx::query(
+        "SELECT e.id, e.title, e.date, e.due_date, e.created_at, e.completed_at, e.is_completed, e.is_pinned, e.project_id, e.milestone_id
+         FROM calendar_events e
+         LEFT JOIN projects p ON p.id = e.project_id
+          WHERE (
+              e.due_date < ?
+              OR (e.due_date IS NULL AND e.date IS NOT NULL AND e.date < ?)
+            )
+            AND e.is_completed = 0
+            AND (e.project_id IS NULL OR p.is_archived = 0)
+         ORDER BY COALESCE(e.due_date, e.date) ASC, e.created_at ASC",
+    )
+    .bind(&today)
+    .bind(&today)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows.iter().map(row_to_calendar_event).collect())
 }
 
 #[tauri::command]
@@ -200,16 +391,18 @@ pub async fn add_event(
     title: String,
     project_id: Option<String>,
     date: Option<String>,
+    due_date: Option<String>,
 ) -> Result<CalendarEvent, String> {
     let id = Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO calendar_events (id, title, date, created_at, is_completed, is_pinned, project_id) VALUES (?, ?, ?, ?, 0, 0, ?)",
+        "INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, NULL)",
     )
     .bind(&id)
     .bind(&title)
     .bind(&date)
+    .bind(&due_date)
     .bind(&created_at)
     .bind(&project_id)
     .execute(pool.inner())
@@ -220,10 +413,13 @@ pub async fn add_event(
         id,
         title,
         date,
+        due_date,
         created_at,
+        completed_at: None,
         is_completed: false,
         is_pinned: false,
         project_id,
+        milestone_id: None,
     })
 }
 
@@ -233,12 +429,68 @@ pub async fn update_event(
     id: String,
     title: String,
     project_id: Option<String>,
+    due_date: Option<String>,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE calendar_events SET title=?, project_id=? WHERE id=?")
+    sqlx::query("UPDATE calendar_events SET title=?, project_id=?, due_date=? WHERE id=?")
         .bind(&title)
         .bind(&project_id)
+        .bind(&due_date)
         .bind(&id)
         .execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reschedule_event(
+    pool: State<'_, SqlitePool>,
+    id: String,
+    date: Option<String>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE calendar_events SET date=? WHERE id=?")
+        .bind(date)
+        .bind(id)
+        .execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn assign_event_milestone(
+    pool: State<'_, SqlitePool>,
+    id: String,
+    milestone_id: Option<String>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE calendar_events SET milestone_id=? WHERE id=?")
+        .bind(&milestone_id)
+        .bind(&id)
+        .execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn batch_assign_event_milestone(
+    pool: State<'_, SqlitePool>,
+    ids: Vec<String>,
+    milestone_id: Option<String>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "UPDATE calendar_events SET milestone_id=? WHERE id IN ({})",
+        placeholders
+    );
+    let mut q = sqlx::query(&sql).bind(&milestone_id);
+    for id in &ids {
+        q = q.bind(id);
+    }
+    q.execute(pool.inner())
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -264,9 +516,9 @@ pub async fn add_events_batch(
     for event in &events {
         let is_completed = event.is_completed as i64;
         let is_pinned = event.is_pinned as i64;
-        sqlx::query("INSERT INTO calendar_events (id, title, date, created_at, is_completed, is_pinned, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(&event.id).bind(&event.title).bind(&event.date)
-            .bind(&event.created_at).bind(is_completed).bind(is_pinned).bind(&event.project_id)
+        sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(&event.id).bind(&event.title).bind(&event.date).bind(&event.due_date)
+            .bind(&event.created_at).bind(&event.completed_at).bind(is_completed).bind(is_pinned).bind(&event.project_id).bind(&event.milestone_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
@@ -287,12 +539,19 @@ pub async fn toggle_event_pinned(pool: State<'_, SqlitePool>, id: String) -> Res
 
 #[tauri::command]
 pub async fn toggle_event_complete(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
-    sqlx::query("UPDATE calendar_events SET is_completed = 1 - is_completed WHERE id=?")
-        .bind(&id)
-        .execute(pool.inner())
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let completed_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE calendar_events
+         SET completed_at = CASE WHEN is_completed = 0 THEN ? ELSE NULL END,
+             is_completed = 1 - is_completed
+         WHERE id=?",
+    )
+    .bind(completed_at)
+    .bind(&id)
+    .execute(pool.inner())
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -365,7 +624,10 @@ pub async fn batch_delete_events(
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner()).await.map(|_| ()).map_err(|e| e.to_string())
+    q.execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -376,13 +638,20 @@ pub async fn batch_complete_events(
     if ids.is_empty() {
         return Ok(());
     }
+    let completed_at = chrono::Utc::now().to_rfc3339();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!("UPDATE calendar_events SET is_completed=1 WHERE id IN ({})", placeholders);
-    let mut q = sqlx::query(&sql);
+    let sql = format!(
+        "UPDATE calendar_events SET is_completed=1, completed_at=COALESCE(completed_at, ?) WHERE id IN ({})",
+        placeholders
+    );
+    let mut q = sqlx::query(&sql).bind(completed_at);
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner()).await.map(|_| ()).map_err(|e| e.to_string())
+    q.execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -394,12 +663,18 @@ pub async fn batch_uncomplete_events(
         return Ok(());
     }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!("UPDATE calendar_events SET is_completed=0 WHERE id IN ({})", placeholders);
+    let sql = format!(
+        "UPDATE calendar_events SET is_completed=0, completed_at=NULL WHERE id IN ({})",
+        placeholders
+    );
     let mut q = sqlx::query(&sql);
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner()).await.map(|_| ()).map_err(|e| e.to_string())
+    q.execute(pool.inner())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// 新增：查询每个项目的全量统计（total, completed）
@@ -446,7 +721,8 @@ pub async fn reschedule_events(
         "UPDATE calendar_events SET date = NULL
          WHERE is_completed = 0
            AND project_id IS NOT NULL
-           AND is_pinned = 0",
+           AND is_pinned = 0
+           AND project_id IN (SELECT id FROM projects WHERE is_archived = 0)",
     )
     .execute(&mut *tx)
     .await
@@ -466,6 +742,7 @@ pub async fn reschedule_events(
          WHERE is_completed = 0
            AND project_id IS NOT NULL
            AND date IS NULL
+           AND project_id IN (SELECT id FROM projects WHERE is_archived = 0)
          ORDER BY created_at ASC",
     )
     .fetch_all(pool.inner())
@@ -518,8 +795,16 @@ pub async fn reschedule_events(
     // 第四步：用单条 CASE WHEN 语句批量写入新日期
     let count = assignments.len() as u32;
     if count > 0 {
-        let case_clauses = assignments.iter().map(|_| "WHEN id=? THEN ?").collect::<Vec<_>>().join(" ");
-        let in_placeholders = assignments.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let case_clauses = assignments
+            .iter()
+            .map(|_| "WHEN id=? THEN ?")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let in_placeholders = assignments
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             "UPDATE calendar_events SET date = CASE {} END WHERE id IN ({})",
             case_clauses, in_placeholders
@@ -538,11 +823,143 @@ pub async fn reschedule_events(
     Ok(count)
 }
 
+async fn build_reschedule_changes(
+    pool: &SqlitePool,
+    schedule: &std::collections::HashMap<String, Vec<String>>,
+) -> Result<Vec<RescheduleChange>, String> {
+    let managed: std::collections::HashSet<String> =
+        schedule.values().flat_map(|v| v.iter().cloned()).collect();
+
+    let today = chrono::Local::now().date_naive();
+    let rows = sqlx::query(
+        "SELECT id, title, date, project_id
+         FROM calendar_events
+         WHERE is_completed = 0
+           AND project_id IS NOT NULL
+           AND is_pinned = 0
+           AND project_id IN (SELECT id FROM projects WHERE is_archived = 0)
+         ORDER BY created_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut new_dates: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut pending: std::collections::HashMap<String, std::collections::VecDeque<String>> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let id: String = row.get("id");
+        let project_id: String = row.get("project_id");
+        new_dates.insert(id.clone(), None);
+        if managed.contains(&project_id) {
+            pending.entry(project_id).or_default().push_back(id);
+        }
+    }
+
+    if !managed.is_empty() && !pending.is_empty() {
+        let mut cursor = today;
+        let max_days = 365 * 2;
+
+        for _ in 0..max_days {
+            if pending.is_empty() {
+                break;
+            }
+            let weekday = cursor.weekday().number_from_monday().to_string();
+            if let Some(project_ids) = schedule.get(&weekday) {
+                for pid in project_ids {
+                    let should_remove = if let Some(queue) = pending.get_mut(pid) {
+                        if let Some(event_id) = queue.pop_front() {
+                            new_dates.insert(event_id, Some(cursor.to_string()));
+                        }
+                        queue.is_empty()
+                    } else {
+                        false
+                    };
+                    if should_remove {
+                        pending.remove(pid);
+                    }
+                }
+            }
+            cursor = cursor.succ_opt().ok_or("日期溢出")?;
+        }
+    }
+
+    let mut changes = Vec::new();
+    for row in &rows {
+        let id: String = row.get("id");
+        let old_date: Option<String> = row.get("date");
+        let new_date = new_dates.get(&id).cloned().unwrap_or(None);
+        if old_date != new_date {
+            changes.push(RescheduleChange {
+                id,
+                title: row.get("title"),
+                project_id: row.get("project_id"),
+                old_date,
+                new_date,
+            });
+        }
+    }
+
+    Ok(changes)
+}
+
+async fn write_reschedule_dates(
+    pool: &SqlitePool,
+    changes: Vec<RescheduleChange>,
+    use_old_dates: bool,
+) -> Result<u32, String> {
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let count = changes.len() as u32;
+
+    for change in changes {
+        let target_date = if use_old_dates {
+            change.old_date
+        } else {
+            change.new_date
+        };
+        sqlx::query("UPDATE calendar_events SET date=? WHERE id=?")
+            .bind(target_date)
+            .bind(change.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+#[tauri::command]
+pub async fn preview_reschedule_events(
+    pool: State<'_, SqlitePool>,
+    schedule: std::collections::HashMap<String, Vec<String>>,
+) -> Result<Vec<RescheduleChange>, String> {
+    build_reschedule_changes(pool.inner(), &schedule).await
+}
+
+#[tauri::command]
+pub async fn apply_reschedule_changes(
+    pool: State<'_, SqlitePool>,
+    changes: Vec<RescheduleChange>,
+) -> Result<u32, String> {
+    write_reschedule_dates(pool.inner(), changes, false).await
+}
+
+#[tauri::command]
+pub async fn undo_reschedule_changes(
+    pool: State<'_, SqlitePool>,
+    changes: Vec<RescheduleChange>,
+) -> Result<u32, String> {
+    write_reschedule_dates(pool.inner(), changes, true).await
+}
+
 // ══════════════════════════════════════════════════════════════
 // 备份 / 恢复 / Flutter 数据迁移
 // ══════════════════════════════════════════════════════════════
 
-/// 导出当前所有数据为 JSON 字符串（Tauri 格式 v2）
+/// 导出当前所有数据为 JSON 字符串（Tauri 格式 v5）
 #[tauri::command]
 pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String> {
     // 1. 项目
@@ -560,11 +977,33 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
                 "color_value": r.get::<i64, _>("color_value"),
                 "priority":    r.get::<i64, _>("priority"),
                 "difficulty":  r.get::<String, _>("difficulty"),
+                "is_archived": r.get::<i64, _>("is_archived") != 0,
             })
         })
         .collect();
 
-    // 2. 日程
+    // 2. 里程碑
+    let milestone_rows = sqlx::query("SELECT * FROM milestones ORDER BY project_id, sort_order")
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let milestones: Vec<serde_json::Value> = milestone_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id":          r.get::<String, _>("id"),
+                "project_id":  r.get::<String, _>("project_id"),
+                "name":        r.get::<String, _>("name"),
+                "sort_order":  r.get::<i64, _>("sort_order"),
+                "status":      r.get::<String, _>("status"),
+                "target_date": r.get::<Option<String>, _>("target_date"),
+                "created_at":  r.get::<String, _>("created_at"),
+            })
+        })
+        .collect();
+
+    // 3. 日程
     let event_rows = sqlx::query("SELECT * FROM calendar_events ORDER BY created_at")
         .fetch_all(pool.inner())
         .await
@@ -577,15 +1016,18 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
                 "id":           r.get::<String, _>("id"),
                 "title":        r.get::<String, _>("title"),
                 "date":         r.get::<Option<String>, _>("date"),
+                "due_date":     r.get::<Option<String>, _>("due_date"),
                 "created_at":   r.get::<String, _>("created_at"),
+                "completed_at": r.get::<Option<String>, _>("completed_at"),
                 "is_completed": r.get::<i64, _>("is_completed") != 0,
                 "is_pinned":    r.get::<i64, _>("is_pinned") != 0,
                 "project_id":   r.get::<Option<String>, _>("project_id"),
+                "milestone_id": r.get::<Option<String>, _>("milestone_id"),
             })
         })
         .collect();
 
-    // 3. 周模板
+    // 4. 周模板
     let weekly_rows = sqlx::query("SELECT * FROM weekly_template ORDER BY day_of_week, sort_order")
         .fetch_all(pool.inner())
         .await
@@ -600,11 +1042,12 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
     }
 
     let backup = serde_json::json!({
-        "version": 2,
+        "version": 5,
         "format": "courseflow_tauri",
         "timestamp": chrono::Local::now().to_rfc3339(),
         "data": {
             "projects": projects,
+            "milestones": milestones,
             "events": events,
             "weekly_template": weekly,
         }
@@ -613,7 +1056,7 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
     serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())
 }
 
-/// 从 Tauri 格式 v2 备份恢复（完全覆盖）
+/// 从 Tauri 格式备份恢复（完全覆盖）
 #[tauri::command]
 pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<String, String> {
     let backup: serde_json::Value =
@@ -632,6 +1075,10 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM milestones")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM projects")
         .execute(&mut *tx)
         .await
@@ -643,28 +1090,47 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
     // 写入项目
     if let Some(projects) = data.get("projects").and_then(|v| v.as_array()) {
         for p in projects {
-            sqlx::query("INSERT INTO projects (id, name, color_value, priority, difficulty) VALUES (?,?,?,?,?)")
+            sqlx::query("INSERT INTO projects (id, name, color_value, priority, difficulty, is_archived) VALUES (?,?,?,?,?,?)")
                 .bind(p["id"].as_str().unwrap_or(""))
                 .bind(p["name"].as_str().unwrap_or(""))
                 .bind(p["color_value"].as_i64().unwrap_or(0))
                 .bind(p["priority"].as_i64().unwrap_or(0))
                 .bind(p["difficulty"].as_str().unwrap_or("low"))
+                .bind(if p["is_archived"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                 .execute(&mut *tx).await.map_err(|e| e.to_string())?;
             project_count += 1;
+        }
+    }
+
+    // 写入里程碑
+    if let Some(milestones) = data.get("milestones").and_then(|v| v.as_array()) {
+        for m in milestones {
+            sqlx::query("INSERT INTO milestones (id, project_id, name, sort_order, status, target_date, created_at) VALUES (?,?,?,?,?,?,?)")
+                .bind(m["id"].as_str().unwrap_or(""))
+                .bind(m["project_id"].as_str().unwrap_or(""))
+                .bind(m["name"].as_str().unwrap_or(""))
+                .bind(m["sort_order"].as_i64().unwrap_or(0))
+                .bind(m["status"].as_str().unwrap_or("not_started"))
+                .bind(m["target_date"].as_str())
+                .bind(m["created_at"].as_str().unwrap_or(""))
+                .execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
     }
 
     // 写入日程
     if let Some(events) = data.get("events").and_then(|v| v.as_array()) {
         for e in events {
-            sqlx::query("INSERT INTO calendar_events (id, title, date, created_at, is_completed, is_pinned, project_id) VALUES (?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
                 .bind(e["id"].as_str().unwrap_or(""))
                 .bind(e["title"].as_str().unwrap_or(""))
                 .bind(e["date"].as_str())
+                .bind(e["due_date"].as_str())
                 .bind(e["created_at"].as_str().unwrap_or(""))
+                .bind(e["completed_at"].as_str())
                 .bind(if e["is_completed"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                 .bind(if e["is_pinned"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                 .bind(e["project_id"].as_str())
+                .bind(e["milestone_id"].as_str())
                 .execute(&mut *tx).await.map_err(|e| e.to_string())?;
             event_count += 1;
         }
@@ -721,6 +1187,10 @@ pub async fn import_flutter_backup(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM milestones")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM projects")
         .execute(&mut *tx)
         .await
@@ -732,7 +1202,7 @@ pub async fn import_flutter_backup(
     // ── 项目：camelCase → snake_case ──
     if let Some(projects) = data.get("projects_data.json").and_then(|v| v.as_array()) {
         for p in projects {
-            sqlx::query("INSERT INTO projects (id, name, color_value, priority, difficulty) VALUES (?,?,?,?,?)")
+            sqlx::query("INSERT INTO projects (id, name, color_value, priority, difficulty, is_archived) VALUES (?,?,?,?,?,0)")
                 .bind(p["id"].as_str().unwrap_or(""))
                 .bind(p["name"].as_str().unwrap_or(""))
                 .bind(p["colorValue"].as_i64().unwrap_or(0))   // Flutter: colorValue
@@ -756,11 +1226,13 @@ pub async fn import_flutter_backup(
             if let Some(events) = event_list.as_array() {
                 for ev in events {
                     let id = Uuid::new_v4().to_string();
-                    sqlx::query("INSERT INTO calendar_events (id, title, date, created_at, is_completed, is_pinned, project_id) VALUES (?,?,?,?,?,?,?)")
+                    sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?,?,?,?,?,?,?,?,?,NULL)")
                         .bind(&id)
                         .bind(ev["title"].as_str().unwrap_or(""))
                         .bind(date_str)
+                        .bind(Option::<String>::None)
                         .bind(ev["createdAt"].as_str().unwrap_or(""))     // Flutter: createdAt
+                        .bind(Option::<String>::None)
                         .bind(if ev["isCompleted"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                         .bind(0i64)                                        // Flutter 无此字段，默认未锁定
                         .bind(ev["projectId"].as_str())                    // Flutter: projectId
@@ -876,6 +1348,9 @@ pub async fn get_habits(
 
     let today = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     let today_dow = today.weekday().number_from_monday();
+    let history_start = (today - chrono::Duration::days(366))
+        .format("%Y-%m-%d")
+        .to_string();
 
     let habit_rows = sqlx::query(
         "SELECT id, name, color_value, days_of_week, created_at, is_active FROM habits WHERE is_active = 1 ORDER BY created_at ASC",
@@ -884,10 +1359,19 @@ pub async fn get_habits(
     .await
     .map_err(|e| e.to_string())?;
 
-    let completion_rows = sqlx::query("SELECT habit_id, date FROM habit_completions")
-        .fetch_all(pool.inner())
-        .await
-        .map_err(|e| e.to_string())?;
+    let completion_rows = sqlx::query(
+        "SELECT hc.habit_id, hc.date
+         FROM habit_completions hc
+         JOIN habits h ON h.id = hc.habit_id
+         WHERE h.is_active = 1
+           AND hc.date >= ?
+           AND hc.date <= ?",
+    )
+    .bind(&history_start)
+    .bind(&date)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut completion_map: HashMap<String, HashSet<String>> = HashMap::new();
     for row in completion_rows {
@@ -895,6 +1379,7 @@ pub async fn get_habits(
         let d: String = row.get("date");
         completion_map.entry(habit_id).or_default().insert(d);
     }
+    let empty_completions: HashSet<String> = HashSet::new();
 
     let result = habit_rows
         .iter()
@@ -905,10 +1390,10 @@ pub async fn get_habits(
                 .split(',')
                 .filter_map(|s| s.trim().parse::<u32>().ok())
                 .collect();
-            let completions = completion_map.get(&id).cloned().unwrap_or_default();
+            let completions = completion_map.get(&id).unwrap_or(&empty_completions);
             let completed_today = completions.contains(&date);
             let scheduled_today = scheduled_days.contains(&today_dow);
-            let streak = calculate_streak(&scheduled_days, &completions, today);
+            let streak = calculate_streak(&scheduled_days, completions, today);
 
             HabitWithStats {
                 id,
@@ -996,14 +1481,12 @@ pub async fn toggle_habit_completion(
     habit_id: String,
     date: String,
 ) -> Result<bool, String> {
-    let existing = sqlx::query(
-        "SELECT id FROM habit_completions WHERE habit_id = ? AND date = ?",
-    )
-    .bind(&habit_id)
-    .bind(&date)
-    .fetch_optional(pool.inner())
-    .await
-    .map_err(|e| e.to_string())?;
+    let existing = sqlx::query("SELECT id FROM habit_completions WHERE habit_id = ? AND date = ?")
+        .bind(&habit_id)
+        .bind(&date)
+        .fetch_optional(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
 
     if existing.is_some() {
         // 已打卡 → 撤销

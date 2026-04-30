@@ -1,13 +1,14 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Download, Upload, School, AlertCircle,
+  ClipboardList, Download, Upload, School, AlertCircle,
   CheckCircle2, X, FileJson, Loader2, Sun, Moon,
 } from "lucide-react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useWeeklyStore } from "../store/useWeeklyStore";
 import { useEventStore } from "../store/useEventStore";
 import { useThemeStore } from "../store/useThemeStore";
+import { useUiPreferencesStore, type TodayWorkbenchStyle } from "../store/useUiPreferencesStore";
 
 // ── 工具 ────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ export default function SettingsPage() {
   const { load: loadWeekly } = useWeeklyStore();
   const { invalidateAll, loadMonth, loadUnscheduled } = useEventStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
+  const { todayWorkbenchStyle, setTodayWorkbenchStyle } = useUiPreferencesStore();
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -202,7 +204,7 @@ export default function SettingsPage() {
           <School size={40} className="text-indigo-400" />
         </div>
         <h1 className="text-2xl font-bold text-[var(--text-primary)]">CourseFlow</h1>
-        <p className="text-[var(--text-muted)] text-sm mt-1">Version 2.0.0 · Tauri</p>
+        <p className="text-[var(--text-muted)] text-sm mt-1">Version 3.0.0 · Tauri</p>
       </div>
 
       {/* 全局加载遮罩 */}
@@ -284,7 +286,7 @@ export default function SettingsPage() {
         <p className="text-sm font-semibold text-purple-400 mb-3 px-1">
           外观
         </p>
-        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl">
+        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl divide-y divide-[var(--border-default)]">
           <SettingsItem
             icon={theme === "dark"
               ? <Sun size={18} className="text-yellow-400" />
@@ -293,6 +295,33 @@ export default function SettingsPage() {
             subtitle={theme === "dark" ? "当前为深色主题" : "当前为浅色主题"}
             onClick={toggleTheme}
           />
+          <div className="flex items-center gap-4 w-full px-5 py-4">
+            <ClipboardList size={18} className="text-indigo-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-[var(--text-primary)]">Dashboard 样式</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                {todayWorkbenchStyle === "workbench" ? "当前为紧凑工作台和表格式日历" : "当前为独立卡片布局"}
+              </p>
+            </div>
+            <div className="flex items-center rounded-lg bg-[var(--bg-muted)] p-0.5">
+              {([
+                ["workbench", "工作台"],
+                ["cards", "卡片"],
+              ] as const).map(([style, label]: readonly [TodayWorkbenchStyle, string]) => (
+                <button
+                  key={style}
+                  onClick={() => setTodayWorkbenchStyle(style)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                    todayWorkbenchStyle === style
+                      ? "bg-indigo-600 text-white"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 

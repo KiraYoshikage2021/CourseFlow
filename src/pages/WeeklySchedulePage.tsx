@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Eraser, Wand2, CalendarCheck, FolderOpen, AlertCircle } from "lucide-react";
+import { Eraser, Wand2, CalendarCheck, FolderOpen, AlertCircle, RotateCcw, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore, type Project } from "../store/useProjectStore";
 import { useWeeklyStore, type WeeklySchedule } from "../store/useWeeklyStore";
@@ -43,6 +43,119 @@ function scheduleEquals(a: WeeklySchedule, b: WeeklySchedule): boolean {
     }
   }
   return true;
+}
+
+function filterScheduleByProjects(s: WeeklySchedule, allowedIds: Set<string>): WeeklySchedule {
+  const next: WeeklySchedule = {};
+  for (let i = 1; i <= 7; i++) {
+    const key = i.toString();
+    next[key] = (s[key] ?? []).filter((id) => allowedIds.has(id));
+  }
+  return next;
+}
+
+interface RescheduleChange {
+  id: string;
+  title: string;
+  project_id: string;
+  old_date: string | null;
+  new_date: string | null;
+}
+
+function dateText(date: string | null) {
+  return date ?? "待分配";
+}
+
+function ReschedulePreviewDialog({
+  changes,
+  projects,
+  saving,
+  onConfirm,
+  onCancel,
+}: {
+  changes: RescheduleChange[];
+  projects: Project[];
+  saving: boolean;
+  onConfirm: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const projectMap = useMemo(
+    () => Object.fromEntries(projects.map((p) => [p.id, p])),
+    [projects]
+  );
+  const assigned = changes.filter((change) => !change.old_date && change.new_date).length;
+  const moved = changes.filter((change) => change.old_date && change.new_date).length;
+  const cleared = changes.filter((change) => !change.new_date).length;
+  const visibleChanges = changes.slice(0, 80);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
+      <div className="w-full max-w-2xl max-h-[82vh] bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-2xl shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-default)]">
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">重排预览</h2>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              {assigned} 条新安排 · {moved} 条移动 · {cleared} 条转为待分配
+            </p>
+          </div>
+          <button onClick={onCancel} className="p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-3">
+          <div className="flex flex-col gap-1.5">
+            {visibleChanges.map((change) => {
+              const project = projectMap[change.project_id];
+              const color = project ? colorToHex(project.color_value) : "#6366f1";
+              return (
+                <div key={change.id} className="grid grid-cols-[1fr_auto] gap-3 items-center rounded-lg px-3 py-2 bg-[var(--bg-card)] border border-[var(--border-default)]">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                      <span className="text-sm text-[var(--text-primary)] truncate">{change.title}</span>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-faint)] mt-0.5 truncate">
+                      {project?.name ?? "未知项目"}
+                    </p>
+                  </div>
+                  <div className="text-xs text-[var(--text-secondary)] whitespace-nowrap">
+                    <span className="text-[var(--text-faint)]">{dateText(change.old_date)}</span>
+                    <span className="mx-2 text-[var(--text-faint)]">→</span>
+                    <span className={change.new_date ? "text-indigo-300" : "text-yellow-400"}>
+                      {dateText(change.new_date)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {changes.length > visibleChanges.length && (
+            <p className="text-xs text-[var(--text-faint)] text-center py-3">
+              还有 {changes.length - visibleChanges.length} 项变更未显示
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-[var(--border-default)]">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="flex-1 py-2 rounded-xl bg-[var(--bg-muted)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={saving}
+            className="flex-1 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors font-medium"
+          >
+            {saving ? "应用中…" : "确认重排"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── 单日卡片 ───────────────────────────────────────────────
@@ -131,15 +244,20 @@ function DayCard({
 
 export default function WeeklySchedulePage() {
   const { projects, load: loadProjects } = useProjectStore();
-  const { schedule: savedSchedule, loaded, load: loadWeekly, saveAndReschedule } = useWeeklyStore();
-  const { loadMonth, loadUnscheduled } = useEventStore();
+  const { schedule: savedSchedule, loaded, load: loadWeekly, save } = useWeeklyStore();
+  const { loadMonth, loadUnscheduled, invalidateAll } = useEventStore();
 
   // 草稿状态
   const [draft, setDraft] = useState<WeeklySchedule | null>(null);
   const [saving, setSaving] = useState(false);
   const [lastCount, setLastCount] = useState<number | null>(null);
+  const [lastUndo, setLastUndo] = useState<{ changes: RescheduleChange[]; schedule: WeeklySchedule } | null>(null);
+  const [undoCount, setUndoCount] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [previewChanges, setPreviewChanges] = useState<RescheduleChange[] | null>(null);
+  const [previewSchedule, setPreviewSchedule] = useState<WeeklySchedule | null>(null);
+  const [previewPreviousSchedule, setPreviewPreviousSchedule] = useState<WeeklySchedule | null>(null);
 
   // 【新增】每个项目的待分配事件数量
   const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({});
@@ -175,6 +293,17 @@ export default function WeeklySchedulePage() {
     }
   }
 
+  async function reloadScheduleData() {
+    invalidateAll();
+    const now = new Date();
+    const months = Array.from({ length: 4 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    await Promise.all([loadUnscheduled(), ...months.map((m) => loadMonth(m))]);
+    await loadPendingCounts();
+  }
+
   // 首次或 savedSchedule 更新后初始化草稿
   useEffect(() => {
     if (loaded && draft === null) {
@@ -206,6 +335,8 @@ export default function WeeklySchedulePage() {
       return next;
     });
     setLastCount(null);
+    setLastUndo(null);
+    setUndoCount(null);
     setSaveError(null);
   }
 
@@ -217,6 +348,8 @@ export default function WeeklySchedulePage() {
       return next;
     });
     setLastCount(null);
+    setLastUndo(null);
+    setUndoCount(null);
     setSaveError(null);
   }
 
@@ -226,26 +359,72 @@ export default function WeeklySchedulePage() {
     setLastCount(null);
     setSaveError(null);
     try {
-      // saveAndReschedule 内部已调用 invalidateAll() 清空事件缓存
-      const count = await saveAndReschedule(draft);
-      setLastCount(count);
-
-      // 【关键】保存成功后，用当前 draft 重建一个新的草稿副本
-      // 确保 draft 和 savedSchedule 内容完全一致，isDirty 变为 false
-      setDraft(deepCopy(draft));
-
-      // 重排后重新加载当前可见数据
-      const now = new Date();
-      const months = Array.from({ length: 4 }, (_, i) => {
-        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const activeProjectIds = new Set(projects.filter((p) => !p.is_archived).map((p) => p.id));
+      const scheduleToSave = filterScheduleByProjects(draft, activeProjectIds);
+      const changes = await invoke<RescheduleChange[]>("preview_reschedule_events", {
+        schedule: scheduleToSave,
       });
-      await Promise.all([loadUnscheduled(), ...months.map((m) => loadMonth(m))]);
 
-      // 刷新待分配计数
-      await loadPendingCounts();
+      if (changes.length === 0) {
+        await save(scheduleToSave);
+        setDraft(deepCopy(scheduleToSave));
+        setLastCount(0);
+        setLastUndo(null);
+        setUndoCount(null);
+        await reloadScheduleData();
+        return;
+      }
+
+      setPreviewChanges(changes);
+      setPreviewSchedule(scheduleToSave);
+      setPreviewPreviousSchedule(deepCopy(savedSchedule));
     } catch (e) {
-      console.error("saveAndReschedule 失败:", e);
+      console.error("preview_reschedule_events 失败:", e);
+      setSaveError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleConfirmApply() {
+    if (!previewChanges || !previewSchedule || !previewPreviousSchedule) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await save(previewSchedule);
+      const count = await invoke<number>("apply_reschedule_changes", { changes: previewChanges });
+      setLastCount(count);
+      setLastUndo({ changes: previewChanges, schedule: previewPreviousSchedule });
+      setUndoCount(null);
+      setDraft(deepCopy(previewSchedule));
+      setPreviewChanges(null);
+      setPreviewSchedule(null);
+      setPreviewPreviousSchedule(null);
+      await reloadScheduleData();
+    } catch (e) {
+      console.error("apply_reschedule_changes 失败:", e);
+      setSaveError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUndoReschedule() {
+    if (!lastUndo) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const count = await invoke<number>("undo_reschedule_changes", {
+        changes: lastUndo.changes,
+      });
+      await save(lastUndo.schedule);
+      setDraft(deepCopy(lastUndo.schedule));
+      setLastUndo(null);
+      setLastCount(null);
+      setUndoCount(count);
+      await reloadScheduleData();
+    } catch (e) {
+      console.error("undo_reschedule_changes 失败:", e);
       setSaveError(String(e));
     } finally {
       setSaving(false);
@@ -282,20 +461,25 @@ export default function WeeklySchedulePage() {
     );
   }
 
-  if (projects.length === 0) {
+  const sortedProjects = projects
+    .filter((p) => !p.is_archived)
+    .sort((a, b) => a.priority - b.priority);
+
+  if (sortedProjects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
         <FolderOpen size={52} className="text-[var(--text-faintest)]" />
-        <p className="text-[var(--text-tertiary)] font-medium">还没有任何项目</p>
-        <p className="text-[var(--text-faint)] text-sm">请先去「项目」页添加科目或项目</p>
+        <p className="text-[var(--text-tertiary)] font-medium">没有进行中的项目</p>
+        <p className="text-[var(--text-faint)] text-sm">请先去「项目」页添加或恢复项目</p>
       </div>
     );
   }
 
-  const sortedProjects = [...projects].sort((a, b) => a.priority - b.priority);
+  const activeProjectIds = new Set(sortedProjects.map((p) => p.id));
+  const visibleDraft = filterScheduleByProjects(draft, activeProjectIds);
 
   // 统计当前草稿中被管理的项目总待分配数
-  const managedIds = new Set(Object.values(draft).flat());
+  const managedIds = new Set(Object.values(visibleDraft).flat());
   const totalPending = Object.entries(pendingCounts)
     .filter(([pid]) => managedIds.has(pid))
     .reduce((sum, [, c]) => sum + c, 0);
@@ -333,7 +517,7 @@ export default function WeeklySchedulePage() {
             key={key}
             dayKey={key}
             dayLabel={label}
-            selectedIds={draft[key] ?? []}
+            selectedIds={visibleDraft[key] ?? []}
             projects={sortedProjects}
             pendingCounts={pendingCounts}
             onToggle={(pid) => toggleProject(key, pid)}
@@ -351,9 +535,26 @@ export default function WeeklySchedulePage() {
 
       {/* 上次重排结果提示 */}
       {lastCount !== null && (
-        <div className="flex items-center gap-2 text-sm text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 mb-6">
-          <CalendarCheck size={16} />
-          已成功分配 {lastCount} 条日程 🚀
+        <div className="flex items-center gap-3 text-sm text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 mb-6">
+          <CalendarCheck size={16} className="flex-shrink-0" />
+          <span className="flex-1">已应用 {lastCount} 项排程变更</span>
+          {lastUndo && (
+            <button
+              onClick={handleUndoReschedule}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 transition-colors"
+            >
+              <RotateCcw size={13} />
+              撤销
+            </button>
+          )}
+        </div>
+      )}
+
+      {undoCount !== null && (
+        <div className="flex items-center gap-2 text-sm text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3 mb-6">
+          <RotateCcw size={16} />
+          已撤销 {undoCount} 项排程变更
         </div>
       )}
 
@@ -373,6 +574,21 @@ export default function WeeklySchedulePage() {
           {saving ? "重排中…" : "保存并重排日程"}
         </button>
       </div>
+
+      {previewChanges && (
+        <ReschedulePreviewDialog
+          changes={previewChanges}
+          projects={projects}
+          saving={saving}
+          onConfirm={handleConfirmApply}
+          onCancel={() => {
+            if (saving) return;
+            setPreviewChanges(null);
+            setPreviewSchedule(null);
+            setPreviewPreviousSchedule(null);
+          }}
+        />
+      )}
     </div>
   );
 }

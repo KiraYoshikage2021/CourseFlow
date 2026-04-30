@@ -13,7 +13,10 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
             std::fs::create_dir_all(&app_data_dir).expect("无法创建应用数据目录");
-            let db_path = app_data_dir.join("courseflow_data.db").to_string_lossy().to_string();
+            let db_path = app_data_dir
+                .join("courseflow_data.db")
+                .to_string_lossy()
+                .to_string();
             let pool = tauri::async_runtime::block_on(db::init_db(&db_path));
             app.manage(pool);
             Ok(())
@@ -23,12 +26,24 @@ pub fn run() {
             add_project,
             update_project,
             delete_project,
+            archive_project,
+            restore_project,
             reorder_projects,
+            get_milestones,
+            add_milestone,
+            update_milestone,
+            delete_milestone,
+            reorder_milestones,
             get_events_by_date,
             get_events_by_month,
+            get_events_by_project,
+            get_overdue_events,
             get_unscheduled_events,
             add_event,
             update_event,
+            reschedule_event,
+            assign_event_milestone,
+            batch_assign_event_milestone,
             delete_event,
             add_events_batch,
             batch_delete_events,
@@ -40,6 +55,9 @@ pub fn run() {
             get_weekly_template,
             save_weekly_template,
             reschedule_events,
+            preview_reschedule_events,
+            apply_reschedule_changes,
+            undo_reschedule_changes,
             get_project_stats,
             export_backup,
             import_backup,

@@ -1,13 +1,35 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, X, Pencil, Trash2, Lock, LockOpen } from "lucide-react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
+import {
+  AlertCircle,
+  CalendarCheck,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
+  EyeOff,
+  Lock,
+  LockOpen,
+  Palette,
+  Pencil,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useEventStore, type CalendarEvent } from "../store/useEventStore";
 import { useProjectStore, type Project } from "../store/useProjectStore";
+import { useHabitStore, type HabitWithStats } from "../store/useHabitStore";
+import { useMilestoneStore } from "../store/useMilestoneStore";
+import { useUiPreferencesStore, type TodayWorkbenchStyle } from "../store/useUiPreferencesStore";
+import { DateInput } from "../components/FormControls";
 
 // ── 工具函数 ────────────────────────────────────────────────
 
 function toDateStr(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function colorToHex(val: number) {
@@ -16,6 +38,50 @@ function colorToHex(val: number) {
 
 function getYearMonth(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function addDays(d: Date, days: number) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
+}
+
+function getWeekStart(d: Date) {
+  const dayOffset = (d.getDay() + 6) % 7; // 周一为起始
+  return addDays(d, -dayOffset);
+}
+
+function formatShortDate(d: Date) {
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+function dueLabel(dueDate?: string | null) {
+  return dueDate ? `截止 ${dueDate.slice(5)}` : "";
+}
+
+function dueTone(event: CalendarEvent, today: string) {
+  if (!event.due_date || event.is_completed) return "text-[var(--text-faint)]";
+  if (event.due_date < today) return "text-red-400";
+  if (event.due_date === today) return "text-yellow-400";
+  return "text-[var(--text-faint)]";
+}
+
+function formatWeekRange(start: Date, end: Date) {
+  const startText = `${start.getFullYear()}年${formatShortDate(start)}`;
+  const endText = start.getFullYear() === end.getFullYear()
+    ? formatShortDate(end)
+    : `${end.getFullYear()}年${formatShortDate(end)}`;
+  return `${startText} - ${endText}`;
+}
+
+type DashboardViewMode = "month" | "week";
+type WeekDensity = "comfortable" | "compact";
+type MilestoneNameMap = Record<string, string>;
+
+type TodayWorkItem =
+  | { kind: "task"; id: string; event: CalendarEvent; completed: boolean }
+  | { kind: "habit"; id: string; habit: HabitWithStats; completed: boolean };
+
+function getMilestoneName(event: CalendarEvent, milestoneMap: MilestoneNameMap) {
+  return event.milestone_id ? milestoneMap[event.milestone_id] ?? null : null;
 }
 
 // 按完成状态(未完成优先) + 难度(高→低) + 项目优先级 排序
@@ -102,6 +168,7 @@ function EventManagerDialog({
   events,
   projects,
   projectMap,
+  milestoneMap,
   onClose,
   onAdd,
   onToggle,
@@ -113,30 +180,35 @@ function EventManagerDialog({
   events: CalendarEvent[];
   projects: Project[];
   projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
   onClose: () => void;
-  onAdd: (title: string, projectId: string | null) => Promise<void>;
+  onAdd: (title: string, projectId: string | null, dueDate: string | null) => Promise<void>;
   onToggle: (id: string) => void;
   onPin: (id: string) => void;
-  onEdit: (event: CalendarEvent, title: string, projectId: string | null) => Promise<void>;
+  onEdit: (event: CalendarEvent, title: string, projectId: string | null, dueDate: string | null) => Promise<void>;
   onDelete: (id: string) => void;
 }) {
   const [newTitle, setNewTitle] = useState("");
+  const [newDueDate, setNewDueDate] = useState("");
   const [newProjectId, setNewProjectId] = useState<string | null>(
     projects.length > 0 ? projects[0].id : null
   );
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editProjectId, setEditProjectId] = useState<string | null>(null);
+  const [editDueDate, setEditDueDate] = useState("");
   const [saving, setSaving] = useState(false);
 
   const [month, day] = [date.slice(5, 7), date.slice(8, 10)];
+  const todayStr = toDateStr(new Date());
 
   async function handleAdd() {
     if (!newTitle.trim()) return;
     setSaving(true);
     try {
-      await onAdd(newTitle.trim(), newProjectId);
+      await onAdd(newTitle.trim(), newProjectId, newDueDate || null);
       setNewTitle("");
+      setNewDueDate("");
     } finally {
       setSaving(false);
     }
@@ -146,13 +218,14 @@ function EventManagerDialog({
     setEditingEvent(event);
     setEditTitle(event.title);
     setEditProjectId(event.project_id);
+    setEditDueDate(event.due_date ?? "");
   }
 
   async function handleSaveEdit() {
     if (!editingEvent || !editTitle.trim()) return;
     setSaving(true);
     try {
-      await onEdit(editingEvent, editTitle.trim(), editProjectId);
+      await onEdit(editingEvent, editTitle.trim(), editProjectId, editDueDate || null);
       setEditingEvent(null);
     } finally {
       setSaving(false);
@@ -182,6 +255,7 @@ function EventManagerDialog({
           )}
           {sorted.map((event) => {
             const project = event.project_id ? projectMap[event.project_id] : null;
+            const milestoneName = getMilestoneName(event, milestoneMap);
             if (editingEvent?.id === event.id) {
               // 编辑行
               return (
@@ -198,6 +272,15 @@ function EventManagerDialog({
                     value={editProjectId}
                     onChange={setEditProjectId}
                   />
+                  <div>
+                    <label className="block text-[10px] text-[var(--text-faint)] mb-1">截止日期</label>
+                    <DateInput
+                      value={editDueDate}
+                      onChange={setEditDueDate}
+                      placeholder="无截止日期"
+                      buttonClassName="bg-[var(--bg-subtle)] border-transparent py-1.5"
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setEditingEvent(null)}
@@ -241,6 +324,16 @@ function EventManagerDialog({
                 {project && (
                   <span className="text-xs text-[var(--text-muted)] hidden group-hover:inline">{project.name}</span>
                 )}
+                {milestoneName && (
+                  <span className="max-w-24 truncate rounded-md bg-indigo-500/10 px-1.5 py-0.5 text-[10px] text-indigo-300">
+                    {milestoneName}
+                  </span>
+                )}
+                {event.due_date && (
+                  <span className={`text-[10px] flex-shrink-0 ${dueTone(event, todayStr)}`}>
+                    {dueLabel(event.due_date)}
+                  </span>
+                )}
                 <button
                   onClick={() => onPin(event.id)}
                   title={event.is_pinned ? "取消锁定" : "锁定日期"}
@@ -274,6 +367,15 @@ function EventManagerDialog({
         {/* 添加新事项 */}
         <div className="border-t border-[var(--border-strong)] pt-4">
           <ProjectSelect projects={projects} value={newProjectId} onChange={setNewProjectId} />
+          <div className="mt-2">
+            <label className="block text-[10px] text-[var(--text-faint)] mb-1">截止日期</label>
+            <DateInput
+              value={newDueDate}
+              onChange={setNewDueDate}
+              placeholder="无截止日期"
+              buttonClassName="bg-[var(--bg-muted)] border-transparent rounded-xl"
+            />
+          </div>
           <div className="flex gap-2 mt-2">
             <input
               value={newTitle}
@@ -340,23 +442,388 @@ function ProjectSelect({
   );
 }
 
+// ── 今日工作区 ───────────────────────────────────────────────
+
+function EventMiniRow({
+  event,
+  projectMap,
+  milestoneMap,
+  today,
+  onToggle,
+  onOpenDate,
+}: {
+  event: CalendarEvent;
+  projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
+  today: string;
+  onToggle: (event: CalendarEvent) => void | Promise<void>;
+  onOpenDate: (date: string) => void;
+}) {
+  const project = event.project_id ? projectMap[event.project_id] : null;
+  const color = project ? colorToHex(project.color_value) : "#6366f1";
+  const milestoneName = getMilestoneName(event, milestoneMap);
+
+  return (
+    <div className="flex items-center gap-2 min-w-0 group">
+      <input
+        type="checkbox"
+        checked={event.is_completed}
+        onChange={() => onToggle(event)}
+        className="w-3.5 h-3.5 accent-indigo-500 flex-shrink-0 cursor-pointer"
+      />
+      <div className="w-1 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+      <button
+        onClick={() => event.date && onOpenDate(event.date)}
+        disabled={!event.date}
+        className={`flex-1 min-w-0 text-left text-xs truncate ${
+          event.is_completed
+            ? "line-through text-[var(--text-muted)]"
+            : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+        }`}
+      >
+        {event.title}
+      </button>
+      {event.date && (
+        <span className="text-[10px] text-[var(--text-faint)] flex-shrink-0">{event.date.slice(5)}</span>
+      )}
+      {milestoneName && (
+        <span className="max-w-20 truncate rounded-md bg-indigo-500/10 px-1.5 py-0.5 text-[10px] text-indigo-300 flex-shrink-0">
+          {milestoneName}
+        </span>
+      )}
+      {event.due_date && (
+        <span className={`text-[10px] flex-shrink-0 ${dueTone(event, today)}`}>
+          {dueLabel(event.due_date)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function TodayWorkItemRow({
+  item,
+  projectMap,
+  milestoneMap,
+  today,
+  onToggleEvent,
+  onToggleHabit,
+  onOpenDate,
+}: {
+  item: TodayWorkItem;
+  projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
+  today: string;
+  onToggleEvent: (event: CalendarEvent) => void | Promise<void>;
+  onToggleHabit: (habitId: string) => void | Promise<void>;
+  onOpenDate: (date: string) => void;
+}) {
+  if (item.kind === "habit") {
+    const habit = item.habit;
+    const color = colorToHex(habit.color_value);
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <input
+          type="checkbox"
+          checked={habit.completed_today}
+          onChange={() => onToggleHabit(habit.id)}
+          className="w-3.5 h-3.5 accent-green-500 flex-shrink-0 cursor-pointer"
+        />
+        <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+        <button
+          onClick={() => onToggleHabit(habit.id)}
+          className="flex-1 min-w-0 text-left"
+        >
+          <p className={`text-xs truncate ${
+            habit.completed_today
+              ? "line-through text-[var(--text-muted)]"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          }`}>
+            {habit.name}
+          </p>
+          <p className="text-[10px] text-[var(--text-faint)] truncate">
+            习惯 · 连续 {habit.streak} 天
+          </p>
+        </button>
+      </div>
+    );
+  }
+
+  const event = item.event;
+  const project = event.project_id ? projectMap[event.project_id] : null;
+  const color = project ? colorToHex(project.color_value) : "#6366f1";
+  const milestoneName = getMilestoneName(event, milestoneMap);
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <input
+        type="checkbox"
+        checked={event.is_completed}
+        onChange={() => onToggleEvent(event)}
+        className="w-3.5 h-3.5 accent-indigo-500 flex-shrink-0 cursor-pointer"
+      />
+      <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+      <button
+        onClick={() => event.date && onOpenDate(event.date)}
+        disabled={!event.date}
+        className="flex-1 min-w-0 text-left"
+      >
+        <p className={`text-xs truncate ${
+          event.is_completed
+            ? "line-through text-[var(--text-muted)]"
+            : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+        }`}>
+          {event.title}
+        </p>
+        <p className="text-[10px] text-[var(--text-faint)] truncate">
+          任务{project ? ` · ${project.name}` : ""}
+          {milestoneName ? ` · ${milestoneName}` : ""}
+          {event.due_date && (
+            <span className={dueTone(event, today)}> · {dueLabel(event.due_date)}</span>
+          )}
+        </p>
+      </button>
+    </div>
+  );
+}
+
+function TodayWorkPanel({
+  today,
+  style,
+  todayEvents,
+  overdueEvents,
+  unscheduledEvents,
+  habits,
+  projects,
+  projectMap,
+  milestoneMap,
+  onAddToday,
+  onToggleEvent,
+  onToggleHabit,
+  onOpenDate,
+}: {
+  today: string;
+  style: TodayWorkbenchStyle;
+  todayEvents: CalendarEvent[];
+  overdueEvents: CalendarEvent[];
+  unscheduledEvents: CalendarEvent[];
+  habits: HabitWithStats[];
+  projects: Project[];
+  projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
+  onAddToday: (title: string, projectId: string | null) => Promise<void>;
+  onToggleEvent: (event: CalendarEvent) => void | Promise<void>;
+  onToggleHabit: (habitId: string) => void | Promise<void>;
+  onOpenDate: (date: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [projectId, setProjectId] = useState<string | null>(projects[0]?.id ?? null);
+  const [saving, setSaving] = useState(false);
+
+  const todayTasks = useMemo(
+    () => [...todayEvents].sort((a, b) => compareEvents(a, b, projectMap)),
+    [todayEvents, projectMap]
+  );
+  const visibleOverdue = useMemo(
+    () => [...overdueEvents].filter((e) => !e.is_completed).slice(0, 5),
+    [overdueEvents]
+  );
+  const visibleUnscheduled = useMemo(
+    () => [...unscheduledEvents]
+      .filter((e) => !e.is_completed)
+      .sort((a, b) => compareEvents(a, b, projectMap))
+      .slice(0, 5),
+    [unscheduledEvents, projectMap]
+  );
+  const todayHabits = useMemo(
+    () => habits.filter((h) => h.scheduled_today),
+    [habits]
+  );
+  const todayWorkItems = useMemo<TodayWorkItem[]>(() => {
+    const items: TodayWorkItem[] = [
+      ...todayTasks.map((event) => ({
+        kind: "task" as const,
+        id: `task-${event.id}`,
+        event,
+        completed: event.is_completed,
+      })),
+      ...todayHabits.map((habit) => ({
+        kind: "habit" as const,
+        id: `habit-${habit.id}`,
+        habit,
+        completed: habit.completed_today,
+      })),
+    ];
+
+    return items.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      if (a.kind === "task" && b.kind === "task") {
+        return compareEvents(a.event, b.event, projectMap);
+      }
+      if (a.kind === "habit" && b.kind === "habit") {
+        return a.habit.name.localeCompare(b.habit.name);
+      }
+      return a.kind === "task" ? -1 : 1;
+    });
+  }, [todayTasks, todayHabits, projectMap]);
+  const openTodayItems = todayWorkItems.filter((item) => !item.completed).length;
+  const completedTodayItems = todayWorkItems.length - openTodayItems;
+  const useCardLayout = style === "cards";
+  const panelGridClass = useCardLayout
+    ? "grid grid-cols-1 xl:grid-cols-[1.05fr_1.45fr_1fr_1fr] gap-3"
+    : "grid grid-cols-1 xl:grid-cols-[1.05fr_1.45fr_1fr_1fr] rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)]/30 divide-y xl:divide-y-0 xl:divide-x divide-[var(--border-default)] overflow-hidden";
+  const panelSectionClass = useCardLayout
+    ? "rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] p-3 min-w-0"
+    : "p-3 min-w-0";
+  const overdueSectionClass = useCardLayout
+    ? "rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 min-w-0"
+    : "p-3 min-w-0 bg-yellow-500/5";
+
+  async function handleAdd() {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      await onAddToday(title.trim(), projectId);
+      setTitle("");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="mb-5">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h1 className="text-lg font-bold text-[var(--text-primary)]">今日工作台</h1>
+          <p className="text-xs text-[var(--text-muted)]">{today}</p>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
+          <span>{openTodayItems} 个待执行</span>
+          <span>{completedTodayItems}/{todayWorkItems.length} 今日完成</span>
+          <span>{visibleOverdue.length} 个逾期</span>
+        </div>
+      </div>
+
+      <div className={panelGridClass}>
+        <div className={panelSectionClass}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
+            <Plus size={15} className="text-indigo-400" />
+            快速添加
+          </div>
+          <ProjectSelect projects={projects} value={projectId} onChange={setProjectId} />
+          <div className="flex gap-2 mt-2">
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              className="flex-1 min-w-0 bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="添加到今天…"
+            />
+            <button
+              onClick={handleAdd}
+              disabled={saving || !title.trim()}
+              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+            >
+              添加
+            </button>
+          </div>
+        </div>
+
+        <div className={panelSectionClass}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
+            <CalendarCheck size={15} className="text-green-400" />
+            今日执行
+          </div>
+          <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
+            {todayWorkItems.map((item) => (
+              <TodayWorkItemRow
+                key={item.id}
+                item={item}
+                projectMap={projectMap}
+                milestoneMap={milestoneMap}
+                today={today}
+                onToggleEvent={onToggleEvent}
+                onToggleHabit={onToggleHabit}
+                onOpenDate={onOpenDate}
+              />
+            ))}
+            {todayWorkItems.length === 0 && (
+              <span className="text-xs text-[var(--text-faint)]">今天没有执行项</span>
+            )}
+          </div>
+        </div>
+
+        <div className={overdueSectionClass}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-yellow-400 mb-2">
+            <AlertCircle size={15} />
+            逾期任务
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {visibleOverdue.map((event) => (
+              <EventMiniRow
+                key={event.id}
+                event={event}
+                projectMap={projectMap}
+                milestoneMap={milestoneMap}
+                today={today}
+                onToggle={onToggleEvent}
+                onOpenDate={onOpenDate}
+              />
+            ))}
+            {visibleOverdue.length === 0 && (
+              <span className="text-xs text-[var(--text-faint)]">没有逾期任务</span>
+            )}
+          </div>
+        </div>
+
+        <div className={panelSectionClass}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
+            <ClipboardList size={15} className="text-purple-400" />
+            待分配
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {visibleUnscheduled.map((event) => (
+              <EventMiniRow
+                key={event.id}
+                event={event}
+                projectMap={projectMap}
+                milestoneMap={milestoneMap}
+                today={today}
+                onToggle={onToggleEvent}
+                onOpenDate={onOpenDate}
+              />
+            ))}
+            {visibleUnscheduled.length === 0 && (
+              <span className="text-xs text-[var(--text-faint)]">没有待分配任务</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ── 日历格子 ─────────────────────────────────────────────────
 
 function DayCell({
   day,
   isToday,
   isCurrentMonth,
+  style,
   events,
   projectMap,
+  milestoneMap,
   onClick,
 }: {
   day: number;
   isToday: boolean;
   isCurrentMonth: boolean;
+  style: TodayWorkbenchStyle;
   events: CalendarEvent[];
   projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
   onClick: () => void;
 }) {
+  const useCardLayout = style === "cards";
   const sorted = useMemo(
     () => [...events].sort((a, b) => compareEvents(a, b, projectMap)),
     [events, projectMap]
@@ -367,12 +834,16 @@ function DayCell({
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl p-1.5 cursor-pointer transition-colors flex flex-col min-h-[72px] border
+      className={`${useCardLayout ? "rounded-xl" : "rounded-md"} p-1.5 cursor-pointer transition-colors flex flex-col min-h-[72px] border
         ${isToday
           ? "bg-green-500/10 border-green-600"
           : isCurrentMonth
-          ? "bg-[var(--bg-card)] border-[var(--border-default)] hover:border-[var(--bg-subtle)]"
-          : "bg-[var(--bg-card)] border-[var(--border-default)] opacity-40"
+          ? useCardLayout
+            ? "bg-[var(--bg-card)] border-[var(--border-default)] hover:border-[var(--bg-subtle)] hover:bg-[var(--bg-elevated)]/50"
+            : "bg-transparent border-[var(--border-default)] hover:bg-[var(--bg-card)]/60 hover:border-[var(--bg-subtle)]"
+          : useCardLayout
+          ? "bg-[var(--bg-card)] border-[var(--border-default)] opacity-40"
+          : "bg-transparent border-[var(--border-default)] opacity-40"
         }`}
     >
       <span className={`text-xs font-bold mb-1 ${isToday ? "text-green-400" : "text-[var(--text-secondary)]"}`}>
@@ -383,6 +854,7 @@ function DayCell({
           const project = event.project_id ? projectMap[event.project_id] : null;
           const color = project ? colorToHex(project.color_value) : "#6366f1";
           const isHigh = project?.difficulty === "high";
+          const milestoneName = getMilestoneName(event, milestoneMap);
           return (
             <div
               key={event.id}
@@ -401,6 +873,11 @@ function DayCell({
               >
                 {event.title}
               </span>
+              {milestoneName && (
+                <span className="max-w-12 truncate rounded bg-[var(--bg-elevated)] px-1 text-[8px] text-indigo-300 flex-shrink-0">
+                  {milestoneName}
+                </span>
+              )}
               {isHigh && !event.is_completed && (
                 <span className="text-[9px] flex-shrink-0">🔥</span>
               )}
@@ -414,6 +891,237 @@ function DayCell({
           <span className="text-[9px] text-[var(--text-faint)] pl-1">+{extra}</span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── 周视图 ───────────────────────────────────────────────────
+
+function WeekEventRow({
+  event,
+  projectMap,
+  milestoneMap,
+  today,
+  density,
+  showProjectAccents,
+  onToggle,
+  onOpenDate,
+  onDragStart,
+}: {
+  event: CalendarEvent;
+  projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
+  today: string;
+  density: WeekDensity;
+  showProjectAccents: boolean;
+  onToggle: (event: CalendarEvent) => void | Promise<void>;
+  onOpenDate: (date: string) => void;
+  onDragStart: (event: CalendarEvent, e: DragEvent<HTMLDivElement>) => void;
+}) {
+  const project = event.project_id ? projectMap[event.project_id] : null;
+  const color = project ? colorToHex(project.color_value) : "#6366f1";
+  const milestoneName = getMilestoneName(event, milestoneMap);
+  const isCompact = density === "compact";
+  const accentStyle = showProjectAccents
+    ? {
+        backgroundColor: event.is_completed ? "var(--bg-muted)" : `${color}16`,
+        borderColor: event.is_completed ? "transparent" : `${color}44`,
+        borderLeftColor: event.is_completed ? `${color}55` : color,
+      }
+    : {
+        backgroundColor: "var(--bg-muted)",
+        borderColor: "transparent",
+        borderLeftColor: "transparent",
+      };
+
+  return (
+    <div
+      draggable={!event.is_pinned}
+      onDragStart={(e) => onDragStart(event, e)}
+      className={`group flex items-start min-w-0 border border-l-[3px] ${
+        isCompact ? "gap-1.5 rounded-md px-1.5 py-1" : "gap-2 rounded-lg px-2 py-2"
+      } ${
+        event.is_pinned ? "" : "cursor-grab active:cursor-grabbing"
+      }`}
+      style={accentStyle}
+      title={event.is_pinned ? "已锁定，不能拖拽移动" : "拖拽到其他日期"}
+    >
+      <input
+        type="checkbox"
+        checked={event.is_completed}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => onToggle(event)}
+        className={`${isCompact ? "w-3 h-3" : "w-3.5 h-3.5"} mt-0.5 accent-indigo-500 flex-shrink-0 cursor-pointer`}
+      />
+      <button
+        onClick={() => event.date && onOpenDate(event.date)}
+        className="flex-1 min-w-0 text-left"
+      >
+        <span
+          className={`block ${isCompact ? "text-[11px]" : "text-xs"} leading-snug truncate ${
+            event.is_completed
+              ? "line-through text-[var(--text-muted)]"
+              : "text-[var(--text-primary)] group-hover:text-indigo-300"
+          }`}
+        >
+          {event.title}
+        </span>
+        <span className={`block ${isCompact ? "text-[9px]" : "text-[10px]"} truncate mt-0.5 ${event.due_date ? dueTone(event, today) : "text-[var(--text-faint)]"}`}>
+          {project?.name ?? "无项目"}
+          {milestoneName ? ` · ${milestoneName}` : ""}
+          {event.due_date ? ` · ${dueLabel(event.due_date)}` : ""}
+        </span>
+      </button>
+      {event.is_pinned && <Lock size={12} className="text-amber-400 flex-shrink-0 mt-0.5" />}
+    </div>
+  );
+}
+
+function WeekView({
+  weekDates,
+  todayStr,
+  eventsByDate,
+  projectMap,
+  milestoneMap,
+  style,
+  density,
+  hideCompleted,
+  showProjectAccents,
+  onOpenDate,
+  onToggle,
+  onMoveEvent,
+}: {
+  weekDates: Date[];
+  todayStr: string;
+  eventsByDate: Record<string, CalendarEvent[]>;
+  projectMap: Record<string, Project>;
+  milestoneMap: MilestoneNameMap;
+  style: TodayWorkbenchStyle;
+  density: WeekDensity;
+  hideCompleted: boolean;
+  showProjectAccents: boolean;
+  onOpenDate: (date: string) => void;
+  onToggle: (event: CalendarEvent) => void | Promise<void>;
+  onMoveEvent: (event: CalendarEvent, targetDate: string) => void | Promise<void>;
+}) {
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
+  const isCompact = density === "compact";
+  const useCardLayout = style === "cards";
+
+  function handleEventDragStart(event: CalendarEvent, e: DragEvent<HTMLDivElement>) {
+    if (event.is_pinned) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(
+      "application/x-courseflow-event",
+      JSON.stringify({ id: event.id, date: event.date })
+    );
+    e.dataTransfer.setData("text/plain", event.id);
+  }
+
+  function getDraggedEvent(e: DragEvent<HTMLDivElement>) {
+    const raw = e.dataTransfer.getData("application/x-courseflow-event");
+    if (!raw) return null;
+    try {
+      const payload = JSON.parse(raw) as { id?: string; date?: string | null };
+      if (!payload.id || !payload.date) return null;
+      return (eventsByDate[payload.date] ?? []).find((event) => event.id === payload.id) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  return (
+    <div className={`grid grid-cols-7 ${useCardLayout ? "gap-2" : "gap-0"} flex-1 min-h-0`}>
+      {weekDates.map((date, index) => {
+        const dateStr = toDateStr(date);
+        const allEvents = [...(eventsByDate[dateStr] ?? [])].sort((a, b) => compareEvents(a, b, projectMap));
+        const events = hideCompleted
+          ? allEvents.filter((event) => !event.is_completed)
+          : allEvents;
+        const openCount = allEvents.filter((event) => !event.is_completed).length;
+        const hiddenCompletedCount = allEvents.length - events.length;
+        const isToday = dateStr === todayStr;
+        const isDragOver = dragOverDate === dateStr;
+        const columnShapeClass = useCardLayout ? "rounded-xl border" : "border-y border-r first:border-l";
+        const columnToneClass = isDragOver
+          ? "border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/30"
+          : isToday
+          ? "border-green-600 bg-green-500/10"
+          : useCardLayout
+          ? "border-[var(--border-default)] bg-[var(--bg-card)]"
+          : "border-[var(--border-default)] bg-[var(--bg-card)]/30";
+
+        return (
+          <div
+            key={dateStr}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dragOverDate !== dateStr) setDragOverDate(dateStr);
+            }}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              setDragOverDate(dateStr);
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                setDragOverDate(null);
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverDate(null);
+              const draggedEvent = getDraggedEvent(e);
+              if (!draggedEvent || draggedEvent.date === dateStr) return;
+              void onMoveEvent(draggedEvent, dateStr);
+            }}
+            className={`${columnShapeClass} ${columnToneClass} flex flex-col min-h-0`}
+          >
+            <button
+              onClick={() => onOpenDate(dateStr)}
+              className={`${isCompact ? "px-2 py-1.5" : "px-3 py-2"} ${useCardLayout ? "rounded-t-xl" : ""} text-left border-b border-[var(--border-default)] hover:bg-[var(--bg-muted)] transition-colors`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className={`text-xs font-bold ${isToday ? "text-green-400" : "text-[var(--text-secondary)]"}`}>
+                  周{WEEK_DAYS[index]}
+                </span>
+                <span className="text-[10px] text-[var(--text-faint)]">{openCount} 未完成</span>
+              </div>
+              <div className={`${isCompact ? "mt-0.5" : "mt-1"} flex items-end gap-1`}>
+                <span className={`${isCompact ? "text-xl" : "text-2xl"} font-bold leading-none ${isToday ? "text-green-300" : "text-[var(--text-primary)]"}`}>
+                  {date.getDate()}
+                </span>
+                <span className="text-[10px] text-[var(--text-faint)] mb-0.5">{date.getMonth() + 1}月</span>
+              </div>
+            </button>
+
+            <div className={`flex-1 overflow-y-auto ${isCompact ? "p-1.5 gap-1" : "p-2 gap-1.5"} flex flex-col min-h-0`}>
+              {events.map((event) => (
+                <WeekEventRow
+                  key={event.id}
+                  event={event}
+                  projectMap={projectMap}
+                  milestoneMap={milestoneMap}
+                  today={todayStr}
+                  density={density}
+                  showProjectAccents={showProjectAccents}
+                  onToggle={onToggle}
+                  onOpenDate={onOpenDate}
+                  onDragStart={handleEventDragStart}
+                />
+              ))}
+              {events.length === 0 && (
+                <div className="flex-1 min-h-[80px] flex items-center justify-center text-xs text-[var(--text-faint)]">
+                  {hiddenCompletedCount > 0 ? `已隐藏 ${hiddenCompletedCount} 个完成项` : "空"}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -472,11 +1180,32 @@ function ProjectSidebar({
 // ── 主页面 ───────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { eventsByDate, loadMonth, addEvent, updateEvent, deleteEvent, toggle, pin } = useEventStore();
+  const {
+    eventsByDate,
+    unscheduled,
+    overdue,
+    loadMonth,
+    loadUnscheduled,
+    loadOverdue,
+    addEvent,
+    updateEvent,
+    moveEventDate,
+    deleteEvent,
+    toggle,
+    pin,
+  } = useEventStore();
   const { projects, projectMap, load: loadProjects } = useProjectStore();
+  const { habits, load: loadHabits, toggle: toggleHabit } = useHabitStore();
+  const { milestonesByProject, load: loadMilestones } = useMilestoneStore();
+  const { todayWorkbenchStyle } = useUiPreferencesStore();
 
   const today = new Date();
+  const todayStr = toDateStr(today);
   const [focusedDate, setFocusedDate] = useState(today);
+  const [viewMode, setViewMode] = useState<DashboardViewMode>("week");
+  const [weekDensity, setWeekDensity] = useState<WeekDensity>("comfortable");
+  const [weekHideCompleted, setWeekHideCompleted] = useState(false);
+  const [weekProjectAccents, setWeekProjectAccents] = useState(true);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -484,19 +1213,62 @@ export default function DashboardPage() {
 
   const year = focusedDate.getFullYear();
   const month = focusedDate.getMonth() + 1;
+  const weekStart = useMemo(() => getWeekStart(focusedDate), [focusedDate]);
+  const weekDates = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)),
+    [weekStart]
+  );
+  const weekStartStr = toDateStr(weekDates[0]);
+  const weekEndStr = toDateStr(weekDates[6]);
 
-  // 切换月份时加载数据
+  async function loadProjectStats() {
+    const stats = await invoke<Record<string, [number, number]>>("get_project_stats");
+    setProjectStats(stats);
+  }
+
+  // 切换月份/周时加载可见范围数据
   useEffect(() => {
-    const ym = getYearMonth(focusedDate);
-    Promise.all([
-      loadMonth(ym),
-      loadProjects(),
-      invoke<Record<string, [number, number]>>("get_project_stats").then(setProjectStats),
-    ]).finally(() => setLoaded(true));
-  }, [year, month]);
+    const visibleMonths = new Set([getYearMonth(focusedDate), getYearMonth(today)]);
+    if (viewMode === "week") {
+      visibleMonths.add(getYearMonth(weekDates[0]));
+      visibleMonths.add(getYearMonth(weekDates[6]));
+    }
 
-  function changeMonth(offset: number) {
-    setFocusedDate((d) => new Date(d.getFullYear(), d.getMonth() + offset, 1));
+    Promise.all([
+      ...Array.from(visibleMonths).map((ym) => loadMonth(ym)),
+      loadUnscheduled(),
+      loadOverdue(todayStr),
+      loadHabits(todayStr),
+      loadProjects(),
+      loadProjectStats(),
+    ]).finally(() => setLoaded(true));
+  }, [year, month, viewMode, weekStartStr, weekEndStr, todayStr]);
+
+  async function handleAddToday(title: string, projectId: string | null) {
+    await addEvent(title, projectId, todayStr);
+    await loadProjectStats();
+  }
+
+  async function handleToggleEvent(event: CalendarEvent) {
+    await toggle(event.id, event.date);
+    await loadProjectStats();
+  }
+
+  async function handleMoveEvent(event: CalendarEvent, targetDate: string) {
+    await moveEventDate(event, targetDate);
+    await loadOverdue(todayStr);
+  }
+
+  async function handleToggleHabit(habitId: string) {
+    await toggleHabit(habitId, todayStr);
+  }
+
+  function changePeriod(offset: number) {
+    setFocusedDate((d) =>
+      viewMode === "week"
+        ? addDays(d, offset * 7)
+        : new Date(d.getFullYear(), d.getMonth() + offset, 1)
+    );
   }
 
   // 日历格子数据
@@ -508,18 +1280,83 @@ export default function DashboardPage() {
   }, [year, month]);
 
   const sortedProjects = useMemo(
-    () => [...projects].sort((a, b) => a.priority - b.priority),
+    () => projects.filter((p) => !p.is_archived).sort((a, b) => a.priority - b.priority),
     [projects]
   );
 
-  const selectedDateEvents = selectedDay ? (eventsByDate[selectedDay] ?? []) : [];
+  useEffect(() => {
+    if (sortedProjects.length === 0) return;
+    void Promise.all(sortedProjects.map((project) => loadMilestones(project.id)));
+  }, [sortedProjects, loadMilestones]);
+
+  const activeProjectMap = useMemo(
+    () => Object.fromEntries(sortedProjects.map((p) => [p.id, p])),
+    [sortedProjects]
+  );
+
+  const milestoneMap = useMemo<MilestoneNameMap>(
+    () =>
+      Object.fromEntries(
+        Object.values(milestonesByProject)
+          .flat()
+          .map((milestone) => [milestone.id, milestone.name])
+      ),
+    [milestonesByProject]
+  );
+
+  const isVisibleEvent = (event: CalendarEvent) =>
+    !event.project_id || !projectMap[event.project_id]?.is_archived;
+
+  const selectedDateEvents = selectedDay
+    ? (eventsByDate[selectedDay] ?? []).filter(isVisibleEvent)
+    : [];
+
+  const todayEvents = (eventsByDate[todayStr] ?? []).filter(isVisibleEvent);
+  const visibleOverdue = overdue.filter(isVisibleEvent);
+  const visibleUnscheduled = unscheduled.filter(isVisibleEvent);
+  const weekEventsByDate = useMemo(() => {
+    const result: Record<string, CalendarEvent[]> = {};
+    for (const date of weekDates) {
+      const dateStr = toDateStr(date);
+      result[dateStr] = (eventsByDate[dateStr] ?? []).filter(isVisibleEvent);
+    }
+    return result;
+  }, [weekDates, eventsByDate, projectMap]);
+  const weekSummary = useMemo(() => {
+    const events = Object.values(weekEventsByDate).flat();
+    const completed = events.filter((event) => event.is_completed).length;
+    return {
+      total: events.length,
+      open: events.length - completed,
+      completed,
+    };
+  }, [weekEventsByDate]);
+  const periodTitle = viewMode === "week"
+    ? formatWeekRange(weekDates[0], weekDates[6])
+    : MONTH_NAMES[month - 1];
 
   return (
-    <div className="p-6 h-full flex flex-col">
+    <div className="p-6 min-h-full flex flex-col">
+      <TodayWorkPanel
+        today={todayStr}
+        style={todayWorkbenchStyle}
+        todayEvents={todayEvents}
+        overdueEvents={visibleOverdue}
+        unscheduledEvents={visibleUnscheduled}
+        habits={habits}
+        projects={sortedProjects}
+        projectMap={activeProjectMap}
+        milestoneMap={milestoneMap}
+        onAddToday={handleAddToday}
+        onToggleEvent={handleToggleEvent}
+        onToggleHabit={handleToggleHabit}
+        onOpenDate={setSelectedDay}
+      />
+
       {/* 顶部导航 */}
       <div className="flex items-center justify-between mb-5">
         <button
-          onClick={() => changeMonth(-1)}
+          onClick={() => changePeriod(-1)}
           className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1"
         >
           <ChevronLeft size={22} />
@@ -529,17 +1366,90 @@ export default function DashboardPage() {
             onClick={() => setShowMonthPicker(true)}
             className="text-2xl font-bold text-[var(--text-primary)] hover:text-indigo-400 transition-colors"
           >
-            {MONTH_NAMES[month - 1]}
+            {periodTitle}
           </button>
-          <span className="text-2xl font-light text-[var(--text-muted)]">{year}</span>
+          {viewMode === "month" && (
+            <span className="text-2xl font-light text-[var(--text-muted)]">{year}</span>
+          )}
         </div>
-        <button
-          onClick={() => changeMonth(1)}
-          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1"
-        >
-          <ChevronRight size={22} />
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex bg-[var(--bg-muted)] rounded-lg p-0.5">
+            {(["week", "month"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                  viewMode === mode
+                    ? "bg-indigo-600 text-white"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {mode === "month" ? "月" : "周"}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => changePeriod(1)}
+            className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1"
+          >
+            <ChevronRight size={22} />
+          </button>
+        </div>
       </div>
+
+      {viewMode === "week" && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-y border-[var(--border-default)] bg-[var(--bg-card)]/30 px-3 py-2 text-xs">
+          <div className="flex items-center gap-2 text-[var(--text-tertiary)]">
+            <SlidersHorizontal size={14} />
+            <span>周视图</span>
+            <span className="text-[var(--text-faint)]">
+              {weekSummary.open} 未完成 · {weekSummary.completed}/{weekSummary.total} 已完成
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md bg-[var(--bg-muted)] p-0.5">
+              {([
+                ["comfortable", "舒适"],
+                ["compact", "紧凑"],
+              ] as const).map(([density, label]) => (
+                <button
+                  key={density}
+                  onClick={() => setWeekDensity(density)}
+                  className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                    weekDensity === density
+                      ? "bg-indigo-600 text-white"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setWeekHideCompleted((value) => !value)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-colors ${
+                weekHideCompleted
+                  ? "bg-indigo-600/15 text-indigo-300"
+                  : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <EyeOff size={13} />
+              隐藏已完成
+            </button>
+            <button
+              onClick={() => setWeekProjectAccents((value) => !value)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-colors ${
+                weekProjectAccents
+                  ? "bg-indigo-600/15 text-indigo-300"
+                  : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <Palette size={13} />
+              项目色
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 主体：侧边栏 + 日历 */}
       <div className="flex gap-5 flex-1 min-h-0">
@@ -548,42 +1458,61 @@ export default function DashboardPage() {
 
         {/* 日历区 */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* 星期头 */}
-          <div className="grid grid-cols-7 gap-1.5 mb-1.5">
-            {WEEK_DAYS.map((d) => (
-              <div key={d} className="text-center text-xs font-bold text-[var(--text-faint)] py-1">
-                {d}
-              </div>
-            ))}
-          </div>
-
-          {/* 日期格子 */}
           {!loaded ? (
             <div className="flex-1 flex items-center justify-center text-[var(--text-faint)]">加载中…</div>
+          ) : viewMode === "week" ? (
+            <WeekView
+              weekDates={weekDates}
+              todayStr={todayStr}
+              eventsByDate={weekEventsByDate}
+              projectMap={activeProjectMap}
+              milestoneMap={milestoneMap}
+              style={todayWorkbenchStyle}
+              density={weekDensity}
+              hideCompleted={weekHideCompleted}
+              showProjectAccents={weekProjectAccents}
+              onOpenDate={setSelectedDay}
+              onToggle={handleToggleEvent}
+              onMoveEvent={handleMoveEvent}
+            />
           ) : (
-            <div className="grid grid-cols-7 gap-1.5 flex-1 auto-rows-fr">
-              {/* 偏移空格 */}
-              {Array.from({ length: cells.offset }).map((_, i) => (
-                <div key={`empty-${i}`} />
-              ))}
-              {/* 日期 */}
-              {Array.from({ length: cells.daysInMonth }).map((_, i) => {
-                const dayNum = i + 1;
-                const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-                const isToday = dateStr === toDateStr(today);
-                return (
-                  <DayCell
-                    key={dateStr}
-                    day={dayNum}
-                    isToday={isToday}
-                    isCurrentMonth={true}
-                    events={eventsByDate[dateStr] ?? []}
-                    projectMap={projectMap}
-                    onClick={() => setSelectedDay(dateStr)}
-                  />
-                );
-              })}
-            </div>
+            <>
+              {/* 星期头 */}
+              <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+                {WEEK_DAYS.map((d) => (
+                  <div key={d} className="text-center text-xs font-bold text-[var(--text-faint)] py-1">
+                    {d}
+                  </div>
+                ))}
+              </div>
+
+              {/* 日期格子 */}
+              <div className="grid grid-cols-7 gap-1.5 flex-1 auto-rows-fr">
+                {/* 偏移空格 */}
+                {Array.from({ length: cells.offset }).map((_, i) => (
+                  <div key={`empty-${i}`} />
+                ))}
+                {/* 日期 */}
+                {Array.from({ length: cells.daysInMonth }).map((_, i) => {
+                  const dayNum = i + 1;
+                  const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+                  const isToday = dateStr === todayStr;
+                  return (
+                    <DayCell
+                      key={dateStr}
+                      day={dayNum}
+                      isToday={isToday}
+                      isCurrentMonth={true}
+                      style={todayWorkbenchStyle}
+                      events={(eventsByDate[dateStr] ?? []).filter(isVisibleEvent)}
+                      projectMap={activeProjectMap}
+                      milestoneMap={milestoneMap}
+                      onClick={() => setSelectedDay(dateStr)}
+                    />
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -604,12 +1533,13 @@ export default function DashboardPage() {
           date={selectedDay}
           events={selectedDateEvents}
           projects={sortedProjects}
-          projectMap={projectMap}
+          projectMap={activeProjectMap}
+          milestoneMap={milestoneMap}
           onClose={() => setSelectedDay(null)}
-          onAdd={(title, projectId) => addEvent(title, projectId, selectedDay)}
+          onAdd={(title, projectId, dueDate) => addEvent(title, projectId, selectedDay, dueDate)}
           onToggle={(id) => toggle(id, selectedDay)}
           onPin={(id) => pin(id, selectedDay)}
-          onEdit={(event, title, projectId) => updateEvent(event.id, selectedDay, title, projectId)}
+          onEdit={(event, title, projectId, dueDate) => updateEvent(event.id, selectedDay, title, projectId, dueDate)}
           onDelete={(id) => deleteEvent(id, selectedDay)}
         />
       )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, Flame, Pencil, Trash2, X, Check, BarChart2 } from "lucide-react";
 import { useHabitStore, HabitWithStats } from "../store/useHabitStore";
@@ -29,6 +29,13 @@ function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function parseDaysOfWeek(daysOfWeek: string): number[] {
+  return daysOfWeek
+    .split(",")
+    .map((s) => parseInt(s.trim()))
+    .filter((n) => !isNaN(n));
 }
 
 function computeLongestStreak(
@@ -85,9 +92,7 @@ function HabitDialog({
 }) {
   const [name, setName] = useState(habit?.name ?? "");
   const [selectedDays, setSelectedDays] = useState<number[]>(
-    habit
-      ? habit.days_of_week.split(",").map((s) => parseInt(s.trim())).filter((n) => !isNaN(n))
-      : []
+    habit ? parseDaysOfWeek(habit.days_of_week) : []
   );
   const [colorValue] = useState(
     habit?.color_value ?? PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)]
@@ -209,9 +214,7 @@ function HistoryModal({
   }
 
   const completionSet = new Set(completions);
-  const scheduledDows = new Set(
-    habit.days_of_week.split(",").map((s) => parseInt(s.trim())).filter((n) => !isNaN(n))
-  );
+  const scheduledDows = new Set(parseDaysOfWeek(habit.days_of_week));
   const createdDate = habit.created_at.slice(0, 10);
 
   // 热图：最近 12 周
@@ -386,10 +389,7 @@ function HabitCard({
   onHistory: () => void;
 }) {
   const color = colorToHex(habit.color_value);
-  const scheduledDays = habit.days_of_week
-    .split(",")
-    .map((s) => parseInt(s.trim()))
-    .filter((n) => !isNaN(n));
+  const scheduledDays = parseDaysOfWeek(habit.days_of_week);
   const dayLabels = scheduledDays.map((d) => DAY_LABELS[d - 1]).join("、");
 
   return (
@@ -476,12 +476,18 @@ export default function HabitsPage() {
     load(today).finally(() => setLoaded(true));
   }, []);
 
-  const todayHabits = habits.filter((h) =>
-    h.days_of_week.split(",").map((s) => parseInt(s.trim())).includes(todayDow)
-  );
-  const otherHabits = habits.filter(
-    (h) => !h.days_of_week.split(",").map((s) => parseInt(s.trim())).includes(todayDow)
-  );
+  const { todayHabits, otherHabits } = useMemo(() => {
+    const todayList: HabitWithStats[] = [];
+    const otherList: HabitWithStats[] = [];
+    for (const habit of habits) {
+      if (parseDaysOfWeek(habit.days_of_week).includes(todayDow)) {
+        todayList.push(habit);
+      } else {
+        otherList.push(habit);
+      }
+    }
+    return { todayHabits: todayList, otherHabits: otherList };
+  }, [habits, todayDow]);
 
   if (!loaded) {
     return (

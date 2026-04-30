@@ -4,28 +4,35 @@ import { invoke } from "@tauri-apps/api/core";
 export interface CalendarEvent {
   id: string;
   title: string;
-  date: string | null;         // null = 待分配（未绑定日期）
+  date: string | null;         // scheduled date; null = 待分配
+  due_date?: string | null;    // deadline / target completion date
   created_at: string;
+  completed_at?: string | null;
   is_completed: boolean;
   is_pinned: boolean;
   project_id: string | null;
+  milestone_id?: string | null;
 }
 
 interface EventStore {
   eventsByDate: Record<string, CalendarEvent[]>;
   unscheduled: CalendarEvent[];             // date = null 的事件
+  overdue: CalendarEvent[];
   loadingDates: Set<string>;
 
   loadDate: (date: string) => Promise<void>;
   loadMonth: (yearMonth: string) => Promise<void>;
   loadUnscheduled: () => Promise<void>;
-  addEvent: (title: string, projectId: string | null, date?: string | null) => Promise<void>;
+  loadOverdue: (today: string) => Promise<void>;
+  addEvent: (title: string, projectId: string | null, date?: string | null, dueDate?: string | null) => Promise<void>;
   addEventsBatch: (events: CalendarEvent[]) => Promise<void>;
-  updateEvent: (id: string, date: string | null, title: string, projectId: string | null) => Promise<void>;
+  updateEvent: (id: string, date: string | null, title: string, projectId: string | null, dueDate?: string | null) => Promise<void>;
+  moveEventDate: (event: CalendarEvent, targetDate: string | null) => Promise<void>;
   deleteEvent: (id: string, date: string | null) => Promise<void>;
   batchDeleteEvents: (ids: string[]) => Promise<void>;
   batchCompleteEvents: (ids: string[]) => Promise<void>;
   batchUncompleteEvents: (ids: string[]) => Promise<void>;
+  batchAssignMilestone: (ids: string[], milestoneId: string | null) => Promise<void>;
   invalidateAll: () => void;
   toggle: (id: string, date: string | null) => Promise<void>;
   pin: (id: string, date: string | null) => Promise<void>;
@@ -35,6 +42,7 @@ interface EventStore {
 export const useEventStore = create<EventStore>((set, get) => ({
   eventsByDate: {},
   unscheduled: [],
+  overdue: [],
   loadingDates: new Set(),
 
   loadDate: async (date) => {
@@ -78,10 +86,19 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  // date 不传或传 null 时，事件进入 unscheduled
-  addEvent: async (title, projectId, date = null) => {
+  loadOverdue: async (today) => {
     try {
-      const event = await invoke<CalendarEvent>("add_event", { title, projectId, date });
+      const events = await invoke<CalendarEvent[]>("get_overdue_events", { today });
+      set({ overdue: events });
+    } catch (e) {
+      console.error("get_overdue_events 失败:", e);
+    }
+  },
+
+  // date 不传或传 null 时，事件进入 unscheduled
+  addEvent: async (title, projectId, date = null, dueDate = null) => {
+    try {
+      const event = await invoke<CalendarEvent>("add_event", { title, projectId, date, dueDate });
       if (event.date) {
         set((s) => ({
           eventsByDate: {
@@ -120,29 +137,70 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  updateEvent: async (id, date, title, projectId) => {
+  updateEvent: async (id, date, title, projectId, dueDate = null) => {
     // 乐观更新
     if (date) {
       set((s) => ({
         eventsByDate: {
           ...s.eventsByDate,
           [date]: (s.eventsByDate[date] ?? []).map((e) =>
-            e.id === id ? { ...e, title, project_id: projectId } : e
+            e.id === id ? { ...e, title, project_id: projectId, due_date: dueDate } : e
           ),
         },
       }));
     } else {
       set((s) => ({
         unscheduled: s.unscheduled.map((e) =>
-          e.id === id ? { ...e, title, project_id: projectId } : e
+          e.id === id ? { ...e, title, project_id: projectId, due_date: dueDate } : e
         ),
       }));
     }
+    set((s) => ({
+      overdue: s.overdue.map((e) =>
+        e.id === id ? { ...e, title, project_id: projectId, due_date: dueDate } : e
+      ),
+    }));
     try {
-      await invoke("update_event", { id, title, projectId });
+      await invoke("update_event", { id, title, projectId, dueDate });
     } catch (e) {
       console.error("update_event 失败:", e);
       date ? get().loadDate(date) : get().loadUnscheduled();
+      throw e;
+    }
+  },
+
+  moveEventDate: async (event, targetDate) => {
+    const sourceDate = event.date;
+    if (sourceDate === targetDate) return;
+
+    const movedEvent: CalendarEvent = { ...event, date: targetDate };
+    set((s) => {
+      const eventsByDate = { ...s.eventsByDate };
+      if (sourceDate) {
+        eventsByDate[sourceDate] = (eventsByDate[sourceDate] ?? []).filter((e) => e.id !== event.id);
+      }
+      if (targetDate) {
+        eventsByDate[targetDate] = [...(eventsByDate[targetDate] ?? []), movedEvent];
+      }
+
+      const unscheduled = targetDate
+        ? s.unscheduled.filter((e) => e.id !== event.id)
+        : [...s.unscheduled.filter((e) => e.id !== event.id), movedEvent];
+
+      return {
+        eventsByDate,
+        unscheduled,
+        overdue: s.overdue.map((e) => (e.id === event.id ? movedEvent : e)),
+      };
+    });
+
+    try {
+      await invoke("reschedule_event", { id: event.id, date: targetDate });
+    } catch (e) {
+      console.error("reschedule_event 失败:", e);
+      if (sourceDate) await get().loadDate(sourceDate);
+      if (targetDate) await get().loadDate(targetDate);
+      if (!sourceDate || !targetDate) await get().loadUnscheduled();
       throw e;
     }
   },
@@ -158,6 +216,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     } else {
       set((s) => ({ unscheduled: s.unscheduled.filter((e) => e.id !== id) }));
     }
+    set((s) => ({ overdue: s.overdue.filter((e) => e.id !== id) }));
     try {
       await invoke("delete_event", { id });
     } catch (e) {
@@ -177,6 +236,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
       return {
         eventsByDate: updated,
         unscheduled: s.unscheduled.filter((e) => !idSet.has(e.id)),
+        overdue: s.overdue.filter((e) => !idSet.has(e.id)),
       };
     });
     try {
@@ -189,17 +249,21 @@ export const useEventStore = create<EventStore>((set, get) => ({
 
   batchCompleteEvents: async (ids) => {
     const idSet = new Set(ids);
+    const completedAt = new Date().toISOString();
     set((s) => {
       const updated: Record<string, CalendarEvent[]> = {};
       for (const [date, events] of Object.entries(s.eventsByDate)) {
         updated[date] = events.map((e) =>
-          idSet.has(e.id) ? { ...e, is_completed: true } : e
+          idSet.has(e.id) ? { ...e, is_completed: true, completed_at: e.completed_at ?? completedAt } : e
         );
       }
       return {
         eventsByDate: updated,
         unscheduled: s.unscheduled.map((e) =>
-          idSet.has(e.id) ? { ...e, is_completed: true } : e
+          idSet.has(e.id) ? { ...e, is_completed: true, completed_at: e.completed_at ?? completedAt } : e
+        ),
+        overdue: s.overdue.map((e) =>
+          idSet.has(e.id) ? { ...e, is_completed: true, completed_at: e.completed_at ?? completedAt } : e
         ),
       };
     });
@@ -217,13 +281,16 @@ export const useEventStore = create<EventStore>((set, get) => ({
       const updated: Record<string, CalendarEvent[]> = {};
       for (const [date, events] of Object.entries(s.eventsByDate)) {
         updated[date] = events.map((e) =>
-          idSet.has(e.id) ? { ...e, is_completed: false } : e
+          idSet.has(e.id) ? { ...e, is_completed: false, completed_at: null } : e
         );
       }
       return {
         eventsByDate: updated,
         unscheduled: s.unscheduled.map((e) =>
-          idSet.has(e.id) ? { ...e, is_completed: false } : e
+          idSet.has(e.id) ? { ...e, is_completed: false, completed_at: null } : e
+        ),
+        overdue: s.overdue.map((e) =>
+          idSet.has(e.id) ? { ...e, is_completed: false, completed_at: null } : e
         ),
       };
     });
@@ -235,9 +302,42 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
+  batchAssignMilestone: async (ids, milestoneId) => {
+    const idSet = new Set(ids);
+    set((s) => {
+      const updated: Record<string, CalendarEvent[]> = {};
+      for (const [date, events] of Object.entries(s.eventsByDate)) {
+        updated[date] = events.map((e) =>
+          idSet.has(e.id) ? { ...e, milestone_id: milestoneId } : e
+        );
+      }
+      return {
+        eventsByDate: updated,
+        unscheduled: s.unscheduled.map((e) =>
+          idSet.has(e.id) ? { ...e, milestone_id: milestoneId } : e
+        ),
+        overdue: s.overdue.map((e) =>
+          idSet.has(e.id) ? { ...e, milestone_id: milestoneId } : e
+        ),
+      };
+    });
+    try {
+      await invoke("batch_assign_event_milestone", { ids, milestoneId });
+    } catch (e) {
+      console.error("batch_assign_event_milestone 失败:", e);
+      throw e;
+    }
+  },
+
   toggle: async (id, date) => {
     const toggle = (e: CalendarEvent) =>
-      e.id === id ? { ...e, is_completed: !e.is_completed } : e;
+      e.id === id
+        ? {
+            ...e,
+            is_completed: !e.is_completed,
+            completed_at: e.is_completed ? null : new Date().toISOString(),
+          }
+        : e;
     if (date) {
       set((s) => ({
         eventsByDate: {
@@ -248,6 +348,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     } else {
       set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
     }
+    set((s) => ({ overdue: s.overdue.map(toggle) }));
     try {
       await invoke("toggle_event_complete", { id });
     } catch (e) {
@@ -263,6 +364,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
       } else {
         set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
       }
+      set((s) => ({ overdue: s.overdue.map(toggle) }));
     }
   },
 
@@ -279,6 +381,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     } else {
       set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
     }
+    set((s) => ({ overdue: s.overdue.map(toggle) }));
     try {
       await invoke("toggle_event_pinned", { id });
     } catch (e) {
@@ -294,6 +397,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
       } else {
         set((s) => ({ unscheduled: s.unscheduled.map(toggle) }));
       }
+      set((s) => ({ overdue: s.overdue.map(toggle) }));
     }
   },
 
@@ -307,11 +411,12 @@ export const useEventStore = create<EventStore>((set, get) => ({
       return {
         eventsByDate: updated,
         unscheduled: s.unscheduled.filter((e) => e.project_id !== projectId),
+        overdue: s.overdue.filter((e) => e.project_id !== projectId),
       };
     });
   },
 
   invalidateAll: () => {
-    set({ eventsByDate: {}, unscheduled: [], loadingDates: new Set() });
+    set({ eventsByDate: {}, unscheduled: [], overdue: [], loadingDates: new Set() });
   },
 }));

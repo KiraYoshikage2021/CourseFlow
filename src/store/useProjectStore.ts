@@ -9,6 +9,7 @@ export interface Project {
   color_value: number;
   priority: number;
   difficulty: Difficulty;
+  is_archived: boolean;
 }
 
 interface ProjectStore {
@@ -19,6 +20,8 @@ interface ProjectStore {
   add: (name: string, colorValue: number, difficulty: Difficulty) => Promise<Project>;
   update: (id: string, name: string, colorValue: number, difficulty: Difficulty) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  archive: (id: string) => Promise<void>;
+  restore: (id: string) => Promise<void>;
   reorder: (ids: string[]) => Promise<void>;
 }
 
@@ -36,6 +39,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       const projects = raw.map((p) => ({
         ...p,
         difficulty: (p.difficulty?.toLowerCase?.() ?? "low") as Difficulty,
+        is_archived: Boolean(p.is_archived),
       }));
       set({
         projects,
@@ -57,6 +61,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const project = {
       ...raw,
       difficulty: (raw.difficulty?.toLowerCase?.() ?? "low") as Difficulty,
+      is_archived: Boolean(raw.is_archived),
     };
     const projects = [...get().projects, project];
     set({
@@ -80,6 +85,28 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   remove: async (id) => {
     await invoke("delete_project", { id });
     const projects = get().projects.filter((p) => p.id !== id);
+    set({
+      projects,
+      projectMap: Object.fromEntries(projects.map((p) => [p.id, p])),
+    });
+  },
+
+  archive: async (id) => {
+    await invoke("archive_project", { id });
+    const projects = get().projects.map((p) =>
+      p.id === id ? { ...p, is_archived: true } : p
+    );
+    set({
+      projects,
+      projectMap: Object.fromEntries(projects.map((p) => [p.id, p])),
+    });
+  },
+
+  restore: async (id) => {
+    await invoke("restore_project", { id });
+    const projects = get().projects.map((p) =>
+      p.id === id ? { ...p, is_archived: false } : p
+    );
     set({
       projects,
       projectMap: Object.fromEntries(projects.map((p) => [p.id, p])),

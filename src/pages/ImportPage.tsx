@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import {
@@ -7,6 +8,7 @@ import {
 import { useProjectStore } from "../store/useProjectStore";
 import { useEventStore } from "../store/useEventStore";
 import type { CalendarEvent } from "../store/useEventStore";
+import { DateInput } from "../components/FormControls";
 
 // ── 数据类型 ────────────────────────────────────────────────
 
@@ -24,7 +26,15 @@ interface BookImportData {
 // ── 工具函数 ────────────────────────────────────────────────
 
 function toDateStr(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseLocalDate(value: string) {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 function addDays(d: Date, n: number) {
@@ -154,7 +164,7 @@ function GenerateDialog({
     setError("");
     setGenerating(true);
     try {
-      await onGenerate(projectName.trim(), min, max, total, new Date(startDate));
+      await onGenerate(projectName.trim(), min, max, total, parseLocalDate(startDate));
       onClose();
     } catch (e) {
       setError(`生成失败: ${e}`);
@@ -224,11 +234,11 @@ function GenerateDialog({
           {/* 开始日期 */}
           <div>
             <label className="block text-xs text-[var(--text-tertiary)] mb-1">开始日期</label>
-            <input
-              type="date"
+            <DateInput
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              onChange={setStartDate}
+              clearable={false}
+              buttonClassName="bg-[var(--bg-muted)] border-transparent"
             />
           </div>
 
@@ -326,12 +336,12 @@ export default function ImportPage() {
       const events = generateEvents(bookmarks, total, minPages, maxPages, startDate, newProject.id);
 
       // 3. 批量写入（复用 add_events_batch）
-      const { invoke } = await import("@tauri-apps/api/core");
       const now = new Date().toISOString();
       const payload: CalendarEvent[] = events.map((e, i) => ({
         id: `${Date.now()}-${i}`,
         title: e.title,
         date: e.date,
+        due_date: null,
         created_at: now,
         is_completed: false,
         is_pinned: false,

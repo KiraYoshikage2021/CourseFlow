@@ -1,7 +1,6 @@
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::str::FromStr;
 
-
 /// 迁移：确保 calendar_events.date 列允许 NULL
 /// SQLite 不支持 ALTER COLUMN，需要重建表
 async fn migrate_calendar_events_date_nullable(pool: &SqlitePool) {
@@ -89,6 +88,104 @@ async fn migrate_add_is_pinned(pool: &SqlitePool) {
     println!("[迁移] is_pinned 列添加完成");
 }
 
+/// 迁移：为已有项目添加归档状态
+async fn migrate_add_project_archive(pool: &SqlitePool) {
+    let rows = sqlx::query("PRAGMA table_info(projects)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let has_column = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "is_archived"
+    });
+
+    if has_column {
+        return;
+    }
+
+    println!("[迁移] projects 缺少 is_archived 列，正在添加…");
+    sqlx::query("ALTER TABLE projects ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await
+        .expect("迁移：添加 is_archived 列失败");
+    println!("[迁移] is_archived 列添加完成");
+}
+
+/// 迁移：为事件添加所属里程碑
+async fn migrate_add_event_milestone(pool: &SqlitePool) {
+    let rows = sqlx::query("PRAGMA table_info(calendar_events)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let has_column = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "milestone_id"
+    });
+
+    if has_column {
+        return;
+    }
+
+    println!("[迁移] calendar_events 缺少 milestone_id 列，正在添加…");
+    sqlx::query(
+        "ALTER TABLE calendar_events ADD COLUMN milestone_id TEXT REFERENCES milestones(id) ON DELETE SET NULL",
+    )
+    .execute(pool)
+    .await
+    .expect("迁移：添加 milestone_id 列失败");
+    println!("[迁移] milestone_id 列添加完成");
+}
+
+/// 迁移：为事件添加截止日期
+async fn migrate_add_event_due_date(pool: &SqlitePool) {
+    let rows = sqlx::query("PRAGMA table_info(calendar_events)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let has_column = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "due_date"
+    });
+
+    if has_column {
+        return;
+    }
+
+    println!("[迁移] calendar_events 缺少 due_date 列，正在添加…");
+    sqlx::query("ALTER TABLE calendar_events ADD COLUMN due_date TEXT")
+        .execute(pool)
+        .await
+        .expect("迁移：添加 due_date 列失败");
+    println!("[迁移] due_date 列添加完成");
+}
+
+/// 迁移：为事件添加完成时间
+async fn migrate_add_event_completed_at(pool: &SqlitePool) {
+    let rows = sqlx::query("PRAGMA table_info(calendar_events)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let has_column = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "completed_at"
+    });
+
+    if has_column {
+        return;
+    }
+
+    println!("[迁移] calendar_events 缺少 completed_at 列，正在添加…");
+    sqlx::query("ALTER TABLE calendar_events ADD COLUMN completed_at TEXT")
+        .execute(pool)
+        .await
+        .expect("迁移：添加 completed_at 列失败");
+    println!("[迁移] completed_at 列添加完成");
+}
+
 pub async fn init_db(db_path: &str) -> SqlitePool {
     let db_url = format!("sqlite:{}", db_path);
 
@@ -107,7 +204,25 @@ pub async fn init_db(db_path: &str) -> SqlitePool {
             name        TEXT NOT NULL,
             color_value INTEGER NOT NULL,
             priority    INTEGER NOT NULL DEFAULT 3,
-            difficulty  TEXT NOT NULL DEFAULT 'low'
+            difficulty  TEXT NOT NULL DEFAULT 'low',
+            is_archived INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    migrate_add_project_archive(&pool).await;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS milestones (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            status      TEXT NOT NULL DEFAULT 'not_started',
+            target_date TEXT,
+            created_at  TEXT NOT NULL
         )",
     )
     .execute(&pool)
@@ -119,10 +234,13 @@ pub async fn init_db(db_path: &str) -> SqlitePool {
             id           TEXT PRIMARY KEY,
             title        TEXT NOT NULL,
             date         TEXT,
+            due_date     TEXT,
             created_at   TEXT NOT NULL,
+            completed_at TEXT,
             is_completed INTEGER NOT NULL DEFAULT 0,
             is_pinned    INTEGER NOT NULL DEFAULT 0,
-            project_id   TEXT REFERENCES projects(id) ON DELETE SET NULL
+            project_id   TEXT REFERENCES projects(id) ON DELETE SET NULL,
+            milestone_id TEXT REFERENCES milestones(id) ON DELETE SET NULL
         )",
     )
     .execute(&pool)
@@ -135,7 +253,38 @@ pub async fn init_db(db_path: &str) -> SqlitePool {
     // 迁移：为旧数据库添加 is_pinned 列
     migrate_add_is_pinned(&pool).await;
 
+    // 迁移：为旧数据库添加 milestone_id 列
+    migrate_add_event_milestone(&pool).await;
+
+    // 迁移：为旧数据库添加 due_date 列
+    migrate_add_event_due_date(&pool).await;
+
+    // 迁移：为旧数据库添加 completed_at 列
+    migrate_add_event_completed_at(&pool).await;
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_date ON calendar_events(date)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_due_date ON calendar_events(due_date)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_project_id ON calendar_events(project_id)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_events_milestone_id ON calendar_events(milestone_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_milestones_project_id ON milestones(project_id)")
         .execute(&pool)
         .await
         .unwrap();
@@ -166,6 +315,11 @@ pub async fn init_db(db_path: &str) -> SqlitePool {
     .execute(&pool)
     .await
     .unwrap();
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_habit_completions_date ON habit_completions(date)")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS weekly_template (

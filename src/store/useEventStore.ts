@@ -12,6 +12,7 @@ export interface CalendarEvent {
   is_pinned: boolean;
   project_id: string | null;
   milestone_id?: string | null;
+  sort_order?: number;
 }
 
 interface EventStore {
@@ -30,11 +31,11 @@ interface EventStore {
   moveEventDate: (event: CalendarEvent, targetDate: string | null) => Promise<void>;
   deleteEvent: (id: string, date: string | null) => Promise<void>;
   batchDeleteEvents: (ids: string[]) => Promise<void>;
-  batchCompleteEvents: (ids: string[]) => Promise<void>;
+  batchCompleteEvents: (ids: string[], addToReview?: boolean) => Promise<void>;
   batchUncompleteEvents: (ids: string[]) => Promise<void>;
   batchAssignMilestone: (ids: string[], milestoneId: string | null) => Promise<void>;
   invalidateAll: () => void;
-  toggle: (id: string, date: string | null) => Promise<void>;
+  toggle: (id: string, date: string | null, addToReview?: boolean) => Promise<void>;
   pin: (id: string, date: string | null) => Promise<void>;
   deleteByProject: (projectId: string) => Promise<void>;
 }
@@ -247,7 +248,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  batchCompleteEvents: async (ids) => {
+  batchCompleteEvents: async (ids, addToReview = true) => {
     const idSet = new Set(ids);
     const completedAt = new Date().toISOString();
     set((s) => {
@@ -268,7 +269,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
       };
     });
     try {
-      await invoke("batch_complete_events", { ids });
+      await invoke("batch_complete_events", { ids, addToReview });
     } catch (e) {
       console.error("batch_complete_events 失败:", e);
       throw e;
@@ -329,7 +330,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
   },
 
-  toggle: async (id, date) => {
+  toggle: async (id, date, addToReview = true) => {
     const toggle = (e: CalendarEvent) =>
       e.id === id
         ? {
@@ -350,7 +351,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }
     set((s) => ({ overdue: s.overdue.map(toggle) }));
     try {
-      await invoke("toggle_event_complete", { id });
+      await invoke("toggle_event_complete", { id, addToReview });
     } catch (e) {
       console.error("toggle 失败:", e);
       // 回滚

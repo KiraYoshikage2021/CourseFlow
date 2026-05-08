@@ -1,14 +1,18 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  ClipboardList, Download, Upload, School, AlertCircle,
-  CheckCircle2, X, FileJson, Loader2, Sun, Moon,
+  Brain, ClipboardList, Download, Upload, School, AlertCircle,
+  CheckCircle2, X, FileJson, Loader2, Sun, Moon, Sparkles, Volume2, VolumeX,
 } from "lucide-react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useWeeklyStore } from "../store/useWeeklyStore";
 import { useEventStore } from "../store/useEventStore";
 import { useThemeStore } from "../store/useThemeStore";
-import { useUiPreferencesStore, type TodayWorkbenchStyle } from "../store/useUiPreferencesStore";
+import {
+  useUiPreferencesStore,
+  type CompletionFeedbackLevel,
+  type TodayWorkbenchStyle,
+} from "../store/useUiPreferencesStore";
 
 // ── 工具 ────────────────────────────────────────────────────
 
@@ -32,6 +36,25 @@ function downloadJson(json: string, filename: string) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, 100);
+}
+
+interface FsrsSettings {
+  desired_retention: number;
+  maximum_interval: number;
+  weights: number[];
+  optimized_at: string | null;
+  optimizer_review_count: number;
+  optimizer_loss: number | null;
+}
+
+interface FsrsOptimizeResult {
+  updated: boolean;
+  message: string;
+  reviewed_count: number;
+  prediction_count: number;
+  previous_loss: number | null;
+  optimized_loss: number | null;
+  settings: FsrsSettings;
 }
 
 // ── 确认弹窗 ────────────────────────────────────────────────
@@ -99,7 +122,14 @@ export default function SettingsPage() {
   const { load: loadWeekly } = useWeeklyStore();
   const { invalidateAll, loadMonth, loadUnscheduled } = useEventStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
-  const { todayWorkbenchStyle, setTodayWorkbenchStyle } = useUiPreferencesStore();
+  const {
+    todayWorkbenchStyle,
+    completionFeedbackLevel,
+    completionSoundEnabled,
+    setTodayWorkbenchStyle,
+    setCompletionFeedbackLevel,
+    setCompletionSoundEnabled,
+  } = useUiPreferencesStore();
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -108,9 +138,45 @@ export default function SettingsPage() {
     description: string;
     onConfirm: () => void;
   } | null>(null);
+  const [fsrsSettings, setFsrsSettings] = useState<FsrsSettings | null>(null);
+  const [optimizingFsrs, setOptimizingFsrs] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importTypeRef = useRef<"flutter" | "tauri">("tauri");
+
+  useEffect(() => {
+    void loadFsrsSettings();
+  }, []);
+
+  async function loadFsrsSettings() {
+    try {
+      const settings = await invoke<FsrsSettings>("get_fsrs_settings");
+      setFsrsSettings(settings);
+    } catch (e) {
+      console.error("get_fsrs_settings 失败:", e);
+    }
+  }
+
+  async function handleOptimizeFsrs() {
+    setOptimizingFsrs(true);
+    setMessage(null);
+    try {
+      const result = await invoke<FsrsOptimizeResult>("optimize_fsrs_parameters");
+      setFsrsSettings(result.settings);
+      const lossText =
+        result.previous_loss !== null && result.optimized_loss !== null
+          ? ` loss ${result.previous_loss.toFixed(3)} → ${result.optimized_loss.toFixed(3)}`
+          : "";
+      setMessage({
+        type: result.updated ? "success" : "error",
+        text: `${result.message} 已读取 ${result.reviewed_count} 条日志，${result.prediction_count} 条可训练预测。${lossText}`,
+      });
+    } catch (e) {
+      setMessage({ type: "error", text: `FSRS 优化失败: ${e}` });
+    } finally {
+      setOptimizingFsrs(false);
+    }
+  }
 
   // ── 刷新所有 store ──
 
@@ -281,6 +347,60 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* 复习算法 */}
+      <div className="mb-10">
+        <p className="text-sm font-semibold text-cyan-400 mb-3 px-1">
+          复习算法
+        </p>
+        <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl px-5 py-4">
+          <div className="flex items-start gap-4">
+            <Brain size={18} className="text-cyan-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-[var(--text-primary)]">FSRS 参数优化</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                使用 FSRS-5 的 19 个权重，根据本地复习日志优化后续间隔。
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg bg-[var(--bg-muted)] px-3 py-2">
+                  <p className="text-[var(--text-faint)]">目标记住率</p>
+                  <p className="mt-0.5 font-semibold text-[var(--text-primary)]">
+                    {fsrsSettings ? `${Math.round(fsrsSettings.desired_retention * 100)}%` : "加载中"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-[var(--bg-muted)] px-3 py-2">
+                  <p className="text-[var(--text-faint)]">训练日志</p>
+                  <p className="mt-0.5 font-semibold text-[var(--text-primary)]">
+                    {fsrsSettings ? `${fsrsSettings.optimizer_review_count} 条` : "加载中"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-[var(--bg-muted)] px-3 py-2">
+                  <p className="text-[var(--text-faint)]">最近优化</p>
+                  <p className="mt-0.5 font-semibold text-[var(--text-primary)]">
+                    {fsrsSettings?.optimized_at ? fsrsSettings.optimized_at.slice(0, 10) : "默认参数"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-[var(--bg-muted)] px-3 py-2">
+                  <p className="text-[var(--text-faint)]">当前 loss</p>
+                  <p className="mt-0.5 font-semibold text-[var(--text-primary)]">
+                    {fsrsSettings?.optimizer_loss !== null && fsrsSettings?.optimizer_loss !== undefined
+                      ? fsrsSettings.optimizer_loss.toFixed(3)
+                      : "暂无"}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={handleOptimizeFsrs}
+              disabled={optimizingFsrs}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-500 disabled:opacity-50 transition-colors"
+            >
+              {optimizingFsrs && <Loader2 size={13} className="animate-spin" />}
+              优化参数
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* 外观 */}
       <div className="mb-10">
         <p className="text-sm font-semibold text-purple-400 mb-3 px-1">
@@ -321,6 +441,64 @@ export default function SettingsPage() {
                 </button>
               ))}
             </div>
+          </div>
+          <div className="flex items-center gap-4 w-full px-5 py-4">
+            <Sparkles size={18} className="text-green-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-[var(--text-primary)]">完成动效</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                {completionFeedbackLevel === "off"
+                  ? "关闭打勾动画"
+                  : completionFeedbackLevel === "standard"
+                  ? "只显示动态打勾"
+                  : "动态打勾并增加轻量闪光"}
+              </p>
+            </div>
+            <div className="flex items-center rounded-lg bg-[var(--bg-muted)] p-0.5">
+              {([
+                ["off", "关闭"],
+                ["standard", "标准"],
+                ["rich", "丰富"],
+              ] as const).map(([level, label]: readonly [CompletionFeedbackLevel, string]) => (
+                <button
+                  key={level}
+                  onClick={() => setCompletionFeedbackLevel(level)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                    completionFeedbackLevel === level
+                      ? "bg-green-600 text-white"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-4 w-full px-5 py-4">
+            {completionSoundEnabled ? (
+              <Volume2 size={18} className="text-green-400 flex-shrink-0" />
+            ) : (
+              <VolumeX size={18} className="text-[var(--text-muted)] flex-shrink-0" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-[var(--text-primary)]">完成音效</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                {completionSoundEnabled ? "完成任务时播放短促清脆提示音" : "完成任务时不播放声音"}
+              </p>
+            </div>
+            <button
+              onClick={() => setCompletionSoundEnabled(!completionSoundEnabled)}
+              className={`relative h-6 w-11 rounded-full transition-colors ${
+                completionSoundEnabled ? "bg-green-600" : "bg-[var(--bg-muted)]"
+              }`}
+              aria-pressed={completionSoundEnabled}
+            >
+              <span
+                className={`absolute left-0 top-1 h-4 w-4 rounded-full bg-white transition-transform ${
+                  completionSoundEnabled ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>

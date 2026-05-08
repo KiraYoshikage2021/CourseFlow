@@ -1,6 +1,7 @@
 use crate::models::*;
-use chrono::Datelike;
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use std::cmp::Ordering;
 use tauri::State;
 use uuid::Uuid;
 
@@ -16,7 +17,145 @@ fn row_to_calendar_event(r: &SqliteRow) -> CalendarEvent {
         is_pinned: r.get::<i64, _>("is_pinned") != 0,
         project_id: r.get("project_id"),
         milestone_id: r.get("milestone_id"),
+        sort_order: r.get("sort_order"),
     }
+}
+
+fn row_to_review_item(r: &SqliteRow) -> ReviewItem {
+    ReviewItem {
+        id: r.get("id"),
+        title: r.get("title"),
+        source_event_id: r.get("source_event_id"),
+        project_id: r.get("project_id"),
+        milestone_id: r.get("milestone_id"),
+        created_at: r.get("created_at"),
+        is_active: r.get::<i64, _>("is_active") != 0,
+        due_date: r.get("due_date"),
+        last_reviewed_at: r.get("last_reviewed_at"),
+        stability: r.get("stability"),
+        difficulty: r.get("difficulty"),
+        scheduled_days: r.get("scheduled_days"),
+        elapsed_days: r.get("elapsed_days"),
+        reps: r.get("reps"),
+        lapses: r.get("lapses"),
+        project_name: r.get("project_name"),
+        milestone_name: r.get("milestone_name"),
+    }
+}
+
+fn parse_ymd(value: &str) -> Option<NaiveDate> {
+    value
+        .get(0..10)
+        .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+}
+
+async fn next_project_event_sort_order(pool: &SqlitePool, project_id: &str) -> Result<i64, String> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM calendar_events WHERE project_id=?",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+enum NaturalChunk {
+    Number(String),
+    Text(String),
+}
+
+fn next_natural_chunk(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<NaturalChunk> {
+    let first = chars.next()?;
+    let is_number = first.is_ascii_digit();
+    let mut value = String::new();
+    value.push(first);
+
+    while let Some(next) = chars.peek() {
+        if next.is_ascii_digit() != is_number {
+            break;
+        }
+        value.push(*next);
+        chars.next();
+    }
+
+    if is_number {
+        Some(NaturalChunk::Number(value))
+    } else {
+        Some(NaturalChunk::Text(value.to_lowercase()))
+    }
+}
+
+fn compare_numeric_strings(a: &str, b: &str) -> Ordering {
+    let a_trimmed = a.trim_start_matches('0');
+    let b_trimmed = b.trim_start_matches('0');
+    let a_normalized = if a_trimmed.is_empty() { "0" } else { a_trimmed };
+    let b_normalized = if b_trimmed.is_empty() { "0" } else { b_trimmed };
+
+    a_normalized
+        .len()
+        .cmp(&b_normalized.len())
+        .then_with(|| a_normalized.cmp(b_normalized))
+        .then_with(|| a.len().cmp(&b.len()))
+}
+
+fn natural_title_cmp(a: &str, b: &str) -> Ordering {
+    let mut a_chars = a.chars().peekable();
+    let mut b_chars = b.chars().peekable();
+
+    loop {
+        match (
+            next_natural_chunk(&mut a_chars),
+            next_natural_chunk(&mut b_chars),
+        ) {
+            (Some(NaturalChunk::Number(a_num)), Some(NaturalChunk::Number(b_num))) => {
+                let ordering = compare_numeric_strings(&a_num, &b_num);
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            (Some(NaturalChunk::Text(a_text)), Some(NaturalChunk::Text(b_text))) => {
+                let ordering = a_text.cmp(&b_text);
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            (Some(NaturalChunk::Number(_)), Some(NaturalChunk::Text(_))) => {
+                return Ordering::Less;
+            }
+            (Some(NaturalChunk::Text(_)), Some(NaturalChunk::Number(_))) => {
+                return Ordering::Greater;
+            }
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
+fn row_to_fsrs_settings(r: &SqliteRow) -> FsrsSettings {
+    let weights = crate::fsrs::parse_weights(&r.get::<String, _>("fsrs_weights"));
+    FsrsSettings {
+        desired_retention: r.get("desired_retention"),
+        maximum_interval: r.get("maximum_interval"),
+        weights: crate::fsrs::weights_to_vec(&weights),
+        optimized_at: r.get("optimized_at"),
+        optimizer_review_count: r.get("optimizer_review_count"),
+        optimizer_loss: r.get("optimizer_loss"),
+    }
+}
+
+async fn read_fsrs_settings(pool: &SqlitePool) -> Result<FsrsSettings, String> {
+    let row = sqlx::query(
+        "SELECT desired_retention, maximum_interval, fsrs_weights, optimized_at,
+                optimizer_review_count, optimizer_loss
+         FROM review_settings WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row_to_fsrs_settings(&row))
 }
 
 #[tauri::command]
@@ -114,7 +253,12 @@ pub async fn update_project(
 #[tauri::command]
 pub async fn delete_project(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE calendar_events SET milestone_id=NULL WHERE project_id=?")
+    sqlx::query("UPDATE calendar_events SET project_id=NULL, milestone_id=NULL WHERE project_id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE review_items SET project_id=NULL, milestone_id=NULL WHERE project_id=?")
         .bind(&id)
         .execute(&mut *tx)
         .await
@@ -272,6 +416,11 @@ pub async fn delete_milestone(pool: State<'_, SqlitePool>, id: String) -> Result
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE review_items SET milestone_id=NULL WHERE milestone_id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM milestones WHERE id=?")
         .bind(&id)
         .execute(&mut *tx)
@@ -302,7 +451,7 @@ pub async fn get_events_by_date(
     pool: State<'_, SqlitePool>,
     date: String,
 ) -> Result<Vec<CalendarEvent>, String> {
-    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date=? ORDER BY created_at")
+    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order FROM calendar_events WHERE date=? ORDER BY created_at")
         .bind(&date)
         .fetch_all(pool.inner())
         .await
@@ -317,7 +466,7 @@ pub async fn get_events_by_month(
     year_month: String,
 ) -> Result<Vec<CalendarEvent>, String> {
     let pattern = format!("{}%", year_month);
-    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date LIKE ? ORDER BY date, created_at")
+    let rows = sqlx::query("SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order FROM calendar_events WHERE date LIKE ? ORDER BY date, created_at")
         .bind(&pattern)
         .fetch_all(pool.inner())
         .await
@@ -331,7 +480,7 @@ pub async fn get_unscheduled_events(
     pool: State<'_, SqlitePool>,
 ) -> Result<Vec<CalendarEvent>, String> {
     let rows = sqlx::query(
-        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id FROM calendar_events WHERE date IS NULL ORDER BY created_at",
+        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order FROM calendar_events WHERE date IS NULL ORDER BY created_at",
     )
     .fetch_all(pool.inner())
     .await
@@ -346,10 +495,10 @@ pub async fn get_events_by_project(
     project_id: String,
 ) -> Result<Vec<CalendarEvent>, String> {
     let rows = sqlx::query(
-        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id
+        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order
          FROM calendar_events
          WHERE project_id=?
-         ORDER BY date IS NULL, date, created_at",
+         ORDER BY sort_order ASC, created_at ASC",
     )
     .bind(&project_id)
     .fetch_all(pool.inner())
@@ -360,12 +509,35 @@ pub async fn get_events_by_project(
 }
 
 #[tauri::command]
+pub async fn get_events_completed_between(
+    pool: State<'_, SqlitePool>,
+    start: String,
+    end: String,
+) -> Result<Vec<CalendarEvent>, String> {
+    let rows = sqlx::query(
+        "SELECT id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order
+         FROM calendar_events
+         WHERE is_completed = 1
+           AND completed_at IS NOT NULL
+           AND completed_at >= ?
+           AND completed_at < ?
+         ORDER BY completed_at DESC, created_at DESC",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows.iter().map(row_to_calendar_event).collect())
+}
+
+#[tauri::command]
 pub async fn get_overdue_events(
     pool: State<'_, SqlitePool>,
     today: String,
 ) -> Result<Vec<CalendarEvent>, String> {
     let rows = sqlx::query(
-        "SELECT e.id, e.title, e.date, e.due_date, e.created_at, e.completed_at, e.is_completed, e.is_pinned, e.project_id, e.milestone_id
+        "SELECT e.id, e.title, e.date, e.due_date, e.created_at, e.completed_at, e.is_completed, e.is_pinned, e.project_id, e.milestone_id, e.sort_order
          FROM calendar_events e
          LEFT JOIN projects p ON p.id = e.project_id
           WHERE (
@@ -395,9 +567,13 @@ pub async fn add_event(
 ) -> Result<CalendarEvent, String> {
     let id = Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
+    let sort_order = match project_id.as_deref() {
+        Some(project_id) => next_project_event_sort_order(pool.inner(), project_id).await?,
+        None => 0,
+    };
 
     sqlx::query(
-        "INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, NULL)",
+        "INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, NULL, ?)",
     )
     .bind(&id)
     .bind(&title)
@@ -405,6 +581,7 @@ pub async fn add_event(
     .bind(&due_date)
     .bind(&created_at)
     .bind(&project_id)
+    .bind(sort_order)
     .execute(pool.inner())
     .await
     .map_err(|e| e.to_string())?;
@@ -420,6 +597,7 @@ pub async fn add_event(
         is_pinned: false,
         project_id,
         milestone_id: None,
+        sort_order,
     })
 }
 
@@ -431,15 +609,50 @@ pub async fn update_event(
     project_id: Option<String>,
     due_date: Option<String>,
 ) -> Result<(), String> {
-    sqlx::query("UPDATE calendar_events SET title=?, project_id=?, due_date=? WHERE id=?")
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    let current_project_id: Option<String> =
+        sqlx::query_scalar("SELECT project_id FROM calendar_events WHERE id=?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    let sort_order = if current_project_id != project_id {
+        match project_id.as_deref() {
+            Some(next_project_id) => sqlx::query_scalar::<_, i64>(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM calendar_events WHERE project_id=?",
+            )
+            .bind(next_project_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?,
+            None => 0,
+        }
+    } else {
+        sqlx::query_scalar::<_, i64>("SELECT sort_order FROM calendar_events WHERE id=?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    sqlx::query(
+        "UPDATE calendar_events SET title=?, project_id=?, due_date=?, sort_order=? WHERE id=?",
+    )
+    .bind(&title)
+    .bind(&project_id)
+    .bind(&due_date)
+    .bind(sort_order)
+    .bind(&id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE review_items SET title=?, project_id=? WHERE source_event_id=?")
         .bind(&title)
         .bind(&project_id)
-        .bind(&due_date)
         .bind(&id)
-        .execute(pool.inner())
+        .execute(&mut *tx)
         .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -463,13 +676,20 @@ pub async fn assign_event_milestone(
     id: String,
     milestone_id: Option<String>,
 ) -> Result<(), String> {
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE calendar_events SET milestone_id=? WHERE id=?")
         .bind(&milestone_id)
         .bind(&id)
-        .execute(pool.inner())
+        .execute(&mut *tx)
         .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE review_items SET milestone_id=? WHERE source_event_id=?")
+        .bind(&milestone_id)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -486,18 +706,181 @@ pub async fn batch_assign_event_milestone(
         "UPDATE calendar_events SET milestone_id=? WHERE id IN ({})",
         placeholders
     );
+    let review_sql = format!(
+        "UPDATE review_items SET milestone_id=? WHERE source_event_id IN ({})",
+        placeholders
+    );
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
     let mut q = sqlx::query(&sql).bind(&milestone_id);
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner())
+    q.execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    let mut review_q = sqlx::query(&review_sql).bind(&milestone_id);
+    for id in &ids {
+        review_q = review_q.bind(id);
+    }
+    review_q
+        .execute(&mut *tx)
         .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn auto_sort_project_tasks(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+    mode: String,
+) -> Result<(), String> {
+    if mode == "title" {
+        let rows = sqlx::query(
+            "SELECT e.id, e.title, e.sort_order, e.created_at
+             FROM calendar_events e
+             WHERE e.project_id=?",
+        )
+        .bind(&project_id)
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let mut ordered = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("id"),
+                    row.get::<String, _>("title"),
+                    row.get::<i64, _>("sort_order"),
+                    row.get::<String, _>("created_at"),
+                )
+            })
+            .collect::<Vec<_>>();
+        ordered.sort_by(|a, b| {
+            natural_title_cmp(&a.1, &b.1)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
+
+        let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+        for (index, (id, _, _, _)) in ordered.iter().enumerate() {
+            sqlx::query("UPDATE calendar_events SET sort_order=? WHERE id=?")
+                .bind(index as i64)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        return tx.commit().await.map_err(|e| e.to_string());
+    }
+
+    let order_clause = match mode.as_str() {
+        "milestone" => {
+            "CASE WHEN e.milestone_id IS NULL THEN 1 ELSE 0 END ASC,
+             COALESCE(m.sort_order, 9223372036854775807) ASC,
+             e.sort_order ASC,
+             e.created_at ASC"
+        }
+        "due_date" => {
+            "CASE WHEN e.due_date IS NULL THEN 1 ELSE 0 END ASC,
+             e.due_date ASC,
+             e.sort_order ASC,
+             e.created_at ASC"
+        }
+        "date" => {
+            "CASE WHEN e.date IS NULL THEN 1 ELSE 0 END ASC,
+             e.date ASC,
+             e.sort_order ASC,
+             e.created_at ASC"
+        }
+        "incomplete_first" => {
+            "e.is_completed ASC,
+             e.sort_order ASC,
+             e.created_at ASC"
+        }
+        "created_at" => "e.created_at ASC",
+        _ => return Err("未知排序方式".into()),
+    };
+
+    let sql = format!(
+        "SELECT e.id
+         FROM calendar_events e
+         LEFT JOIN milestones m ON m.id = e.milestone_id
+         WHERE e.project_id=?
+         ORDER BY {}",
+        order_clause
+    );
+    let rows = sqlx::query(&sql)
+        .bind(&project_id)
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    for (index, row) in rows.iter().enumerate() {
+        let id: String = row.get("id");
+        sqlx::query("UPDATE calendar_events SET sort_order=? WHERE id=?")
+            .bind(index as i64)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reorder_project_tasks(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+    ordered_event_ids: Vec<String>,
+) -> Result<(), String> {
+    let rows = sqlx::query(
+        "SELECT id
+         FROM calendar_events
+         WHERE project_id=?
+         ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(&project_id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let current_ids = rows
+        .iter()
+        .map(|row| row.get::<String, _>("id"))
+        .collect::<Vec<_>>();
+    let current_id_set = current_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::new();
+    let mut next_order = ordered_event_ids
+        .into_iter()
+        .filter(|id| current_id_set.contains(id) && seen.insert(id.clone()))
+        .collect::<Vec<_>>();
+
+    for id in current_ids {
+        if seen.insert(id.clone()) {
+            next_order.push(id);
+        }
+    }
+
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+    for (index, id) in next_order.iter().enumerate() {
+        sqlx::query("UPDATE calendar_events SET sort_order=? WHERE id=? AND project_id=?")
+            .bind(index as i64)
+            .bind(id)
+            .bind(&project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_event(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
+    crate::review::delete_review_items_for_events(pool.inner(), &[id.clone()]).await?;
     sqlx::query("DELETE FROM calendar_events WHERE id=?")
         .bind(&id)
         .execute(pool.inner())
@@ -513,12 +896,36 @@ pub async fn add_events_batch(
 ) -> Result<usize, String> {
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
     let count = events.len();
+    let mut next_sort_by_project = std::collections::HashMap::<String, i64>::new();
     for event in &events {
         let is_completed = event.is_completed as i64;
         let is_pinned = event.is_pinned as i64;
-        sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        let sort_order = match &event.project_id {
+            Some(project_id) => {
+                if event.sort_order > 0 {
+                    event.sort_order
+                } else {
+                    if !next_sort_by_project.contains_key(project_id) {
+                        let next = sqlx::query_scalar::<_, i64>(
+                            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM calendar_events WHERE project_id=?",
+                        )
+                        .bind(project_id)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        next_sort_by_project.insert(project_id.clone(), next);
+                    }
+                    let next = next_sort_by_project.get_mut(project_id).unwrap();
+                    let assigned = *next;
+                    *next += 1;
+                    assigned
+                }
+            }
+            None => event.sort_order,
+        };
+        sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&event.id).bind(&event.title).bind(&event.date).bind(&event.due_date)
-            .bind(&event.created_at).bind(&event.completed_at).bind(is_completed).bind(is_pinned).bind(&event.project_id).bind(&event.milestone_id)
+            .bind(&event.created_at).bind(&event.completed_at).bind(is_completed).bind(is_pinned).bind(&event.project_id).bind(&event.milestone_id).bind(sort_order)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
@@ -538,8 +945,18 @@ pub async fn toggle_event_pinned(pool: State<'_, SqlitePool>, id: String) -> Res
 }
 
 #[tauri::command]
-pub async fn toggle_event_complete(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
-    let completed_at = chrono::Utc::now().to_rfc3339();
+pub async fn toggle_event_complete(
+    pool: State<'_, SqlitePool>,
+    id: String,
+    add_to_review: Option<bool>,
+) -> Result<(), String> {
+    let was_completed: i64 = sqlx::query("SELECT is_completed FROM calendar_events WHERE id=?")
+        .bind(&id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?
+        .get("is_completed");
+    let completed_at = Utc::now().to_rfc3339();
     sqlx::query(
         "UPDATE calendar_events
          SET completed_at = CASE WHEN is_completed = 0 THEN ? ELSE NULL END,
@@ -550,8 +967,17 @@ pub async fn toggle_event_complete(pool: State<'_, SqlitePool>, id: String) -> R
     .bind(&id)
     .execute(pool.inner())
     .await
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    if was_completed == 0 {
+        if add_to_review.unwrap_or(true) {
+            crate::review::ensure_review_items_for_events(pool.inner(), &[id]).await?;
+        }
+    } else {
+        crate::review::deactivate_review_items_for_events(pool.inner(), &[id]).await?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -559,6 +985,16 @@ pub async fn delete_events_by_project(
     pool: State<'_, SqlitePool>,
     project_id: String,
 ) -> Result<(), String> {
+    let rows = sqlx::query("SELECT id FROM calendar_events WHERE project_id=?")
+        .bind(&project_id)
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    let ids = rows
+        .iter()
+        .map(|row| row.get::<String, _>("id"))
+        .collect::<Vec<_>>();
+    crate::review::delete_review_items_for_events(pool.inner(), &ids).await?;
     sqlx::query("DELETE FROM calendar_events WHERE project_id=?")
         .bind(&project_id)
         .execute(pool.inner())
@@ -618,6 +1054,7 @@ pub async fn batch_delete_events(
     if ids.is_empty() {
         return Ok(());
     }
+    crate::review::delete_review_items_for_events(pool.inner(), &ids).await?;
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!("DELETE FROM calendar_events WHERE id IN ({})", placeholders);
     let mut q = sqlx::query(&sql);
@@ -634,11 +1071,12 @@ pub async fn batch_delete_events(
 pub async fn batch_complete_events(
     pool: State<'_, SqlitePool>,
     ids: Vec<String>,
+    add_to_review: Option<bool>,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
     }
-    let completed_at = chrono::Utc::now().to_rfc3339();
+    let completed_at = Utc::now().to_rfc3339();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "UPDATE calendar_events SET is_completed=1, completed_at=COALESCE(completed_at, ?) WHERE id IN ({})",
@@ -648,10 +1086,11 @@ pub async fn batch_complete_events(
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner())
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    q.execute(pool.inner()).await.map_err(|e| e.to_string())?;
+    if add_to_review.unwrap_or(true) {
+        crate::review::ensure_review_items_for_events(pool.inner(), &ids).await?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -671,10 +1110,9 @@ pub async fn batch_uncomplete_events(
     for id in &ids {
         q = q.bind(id);
     }
-    q.execute(pool.inner())
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    q.execute(pool.inner()).await.map_err(|e| e.to_string())?;
+    crate::review::deactivate_review_items_for_events(pool.inner(), &ids).await?;
+    Ok(())
 }
 
 /// 新增：查询每个项目的全量统计（total, completed）
@@ -743,7 +1181,7 @@ pub async fn reschedule_events(
            AND project_id IS NOT NULL
            AND date IS NULL
            AND project_id IN (SELECT id FROM projects WHERE is_archived = 0)
-         ORDER BY created_at ASC",
+         ORDER BY project_id ASC, sort_order ASC, created_at ASC",
     )
     .fetch_all(pool.inner())
     .await
@@ -838,7 +1276,7 @@ async fn build_reschedule_changes(
            AND project_id IS NOT NULL
            AND is_pinned = 0
            AND project_id IN (SELECT id FROM projects WHERE is_archived = 0)
-         ORDER BY created_at ASC",
+         ORDER BY project_id ASC, sort_order ASC, created_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -956,10 +1394,589 @@ pub async fn undo_reschedule_changes(
 }
 
 // ══════════════════════════════════════════════════════════════
+// 复习计划
+// ══════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn get_due_review_items(
+    pool: State<'_, SqlitePool>,
+    today: String,
+) -> Result<Vec<ReviewItem>, String> {
+    let rows = sqlx::query(
+        "SELECT
+            ri.id, ri.title, ri.source_event_id, ri.project_id, ri.milestone_id,
+            ri.created_at, ri.is_active,
+            rs.due_date, rs.last_reviewed_at, rs.stability, rs.difficulty,
+            rs.scheduled_days, rs.elapsed_days, rs.reps, rs.lapses,
+            p.name AS project_name, m.name AS milestone_name
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         LEFT JOIN milestones m ON m.id = ri.milestone_id
+         WHERE ri.is_active = 1
+           AND rs.due_date <= ?
+           AND (ri.project_id IS NULL OR p.is_archived = 0)
+         ORDER BY rs.due_date ASC, ri.created_at ASC",
+    )
+    .bind(&today)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows.iter().map(row_to_review_item).collect())
+}
+
+#[tauri::command]
+pub async fn get_review_items_by_project(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> Result<Vec<ReviewItem>, String> {
+    let rows = sqlx::query(
+        "SELECT
+            ri.id, ri.title, ri.source_event_id, ri.project_id, ri.milestone_id,
+            ri.created_at, ri.is_active,
+            rs.due_date, rs.last_reviewed_at, rs.stability, rs.difficulty,
+            rs.scheduled_days, rs.elapsed_days, rs.reps, rs.lapses,
+            p.name AS project_name, m.name AS milestone_name
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         LEFT JOIN milestones m ON m.id = ri.milestone_id
+         WHERE ri.project_id = ? AND ri.is_active = 1
+         ORDER BY rs.due_date ASC, ri.created_at ASC",
+    )
+    .bind(&project_id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows.iter().map(row_to_review_item).collect())
+}
+
+#[tauri::command]
+pub async fn get_review_stats(
+    pool: State<'_, SqlitePool>,
+    today: String,
+) -> Result<ReviewStats, String> {
+    let today_date = parse_ymd(&today).ok_or("today 必须是 YYYY-MM-DD 格式")?;
+    let next_7_end = (today_date + Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
+    let last_7_start = (today_date - Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
+    let last_30_start = (today_date - Duration::days(29))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let active_filter = "ri.is_active = 1 AND (ri.project_id IS NULL OR p.is_archived = 0)";
+
+    let total_active: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) AS count
+         FROM review_items ri
+         LEFT JOIN projects p ON p.id = ri.project_id
+         WHERE {}",
+        active_filter
+    ))
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let due_today: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) AS count
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         WHERE {} AND rs.due_date = ?",
+        active_filter
+    ))
+    .bind(&today)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let overdue: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) AS count
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         WHERE {} AND rs.due_date < ?",
+        active_filter
+    ))
+    .bind(&today)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let due_next_7_days: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) AS count
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         WHERE {} AND rs.due_date >= ? AND rs.due_date <= ?",
+        active_filter
+    ))
+    .bind(&today)
+    .bind(&next_7_end)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let reviewed_today: i64 = sqlx::query(
+        "SELECT COUNT(*) AS count FROM review_logs WHERE substr(reviewed_at, 1, 10) = ?",
+    )
+    .bind(&today)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let reviewed_last_7_days: i64 = sqlx::query(
+        "SELECT COUNT(*) AS count
+         FROM review_logs
+         WHERE substr(reviewed_at, 1, 10) >= ? AND substr(reviewed_at, 1, 10) <= ?",
+    )
+    .bind(&last_7_start)
+    .bind(&today)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?
+    .get("count");
+
+    let rating_row = sqlx::query(
+        "SELECT
+            COALESCE(SUM(CASE WHEN rating = 'again' THEN 1 ELSE 0 END), 0) AS again,
+            COALESCE(SUM(CASE WHEN rating = 'hard' THEN 1 ELSE 0 END), 0) AS hard,
+            COALESCE(SUM(CASE WHEN rating = 'good' THEN 1 ELSE 0 END), 0) AS good,
+            COALESCE(SUM(CASE WHEN rating = 'easy' THEN 1 ELSE 0 END), 0) AS easy
+         FROM review_logs
+         WHERE substr(reviewed_at, 1, 10) >= ? AND substr(reviewed_at, 1, 10) <= ?",
+    )
+    .bind(&last_30_start)
+    .bind(&today)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let rating_counts_30_days = ReviewRatingStats {
+        again: rating_row.get("again"),
+        hard: rating_row.get("hard"),
+        good: rating_row.get("good"),
+        easy: rating_row.get("easy"),
+    };
+    let rating_total = rating_counts_30_days.again
+        + rating_counts_30_days.hard
+        + rating_counts_30_days.good
+        + rating_counts_30_days.easy;
+    let retention_percent_30_days = if rating_total == 0 {
+        0.0
+    } else {
+        ((rating_counts_30_days.good + rating_counts_30_days.easy) as f64 / rating_total as f64)
+            * 100.0
+    };
+
+    let load_rows = sqlx::query(&format!(
+        "SELECT rs.due_date AS date, COUNT(*) AS due_count
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         WHERE {} AND rs.due_date >= ? AND rs.due_date <= ?
+         GROUP BY rs.due_date
+         ORDER BY rs.due_date ASC",
+        active_filter
+    ))
+    .bind(&today)
+    .bind(&next_7_end)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let load_by_date: std::collections::HashMap<String, i64> = load_rows
+        .iter()
+        .map(|row| (row.get::<String, _>("date"), row.get::<i64, _>("due_count")))
+        .collect();
+
+    let upcoming_load_7_days = (0..7)
+        .map(|offset| {
+            let date = (today_date + Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            ReviewDailyLoad {
+                due_count: *load_by_date.get(&date).unwrap_or(&0),
+                date,
+            }
+        })
+        .collect();
+
+    Ok(ReviewStats {
+        total_active,
+        due_today,
+        overdue,
+        due_next_7_days,
+        reviewed_today,
+        reviewed_last_7_days,
+        rating_counts_30_days,
+        retention_percent_30_days,
+        upcoming_load_7_days,
+    })
+}
+
+#[tauri::command]
+pub async fn get_fsrs_settings(pool: State<'_, SqlitePool>) -> Result<FsrsSettings, String> {
+    read_fsrs_settings(pool.inner()).await
+}
+
+async fn collect_training_reviews(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::fsrs::TrainingReview>, String> {
+    let rows = sqlx::query(
+        "SELECT item_id, reviewed_at, rating
+         FROM review_logs
+         ORDER BY item_id ASC, reviewed_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut reviews = Vec::new();
+    for row in &rows {
+        let reviewed_at: String = row.get("reviewed_at");
+        let rating: String = row.get("rating");
+        if let (Some(reviewed_date), Some(parsed_rating)) = (
+            parse_ymd(&reviewed_at),
+            crate::fsrs::rating_from_str(&rating),
+        ) {
+            reviews.push(crate::fsrs::TrainingReview {
+                item_id: row.get("item_id"),
+                reviewed_date,
+                rating: parsed_rating,
+            });
+        }
+    }
+    Ok(reviews)
+}
+
+async fn rebuild_review_states_from_logs(
+    pool: &SqlitePool,
+    settings: &FsrsSettings,
+) -> Result<(), String> {
+    let weights = if settings.weights.len() == 19 {
+        let mut parsed = [0.0; 19];
+        parsed.copy_from_slice(&settings.weights);
+        parsed
+    } else {
+        crate::fsrs::DEFAULT_FSRS_WEIGHTS
+    };
+    let reviews = collect_training_reviews(pool).await?;
+    let mut grouped: std::collections::BTreeMap<String, Vec<crate::fsrs::TrainingReview>> =
+        std::collections::BTreeMap::new();
+    for review in reviews {
+        grouped
+            .entry(review.item_id.clone())
+            .or_default()
+            .push(review);
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    for (item_id, item_reviews) in grouped.iter_mut() {
+        item_reviews.sort_by_key(|review| review.reviewed_date);
+        let mut memory: Option<crate::fsrs::MemoryState> = None;
+        let mut last_reviewed: Option<NaiveDate> = None;
+        let mut lapses = 0i64;
+        let mut last_elapsed_days = 0i64;
+        let mut last_scheduled: Option<crate::fsrs::ScheduledReview> = None;
+
+        for review in item_reviews.iter() {
+            let elapsed_days = last_reviewed
+                .map(|date| (review.reviewed_date - date).num_days().max(0))
+                .unwrap_or(0);
+            last_elapsed_days = elapsed_days;
+            let scheduled = crate::fsrs::schedule(
+                &weights,
+                settings.desired_retention,
+                settings.maximum_interval,
+                memory,
+                review.rating,
+                elapsed_days,
+                lapses,
+                review.reviewed_date,
+            );
+            memory = Some(crate::fsrs::MemoryState {
+                stability: scheduled.stability,
+                difficulty: scheduled.difficulty,
+            });
+            lapses = scheduled.lapses;
+            last_reviewed = Some(review.reviewed_date);
+            last_scheduled = Some(scheduled);
+        }
+
+        if let (Some(scheduled), Some(reviewed_date)) = (last_scheduled, last_reviewed) {
+            let reps = item_reviews.len() as i64;
+            sqlx::query(
+                "UPDATE review_states
+                 SET due_date=?, last_reviewed_at=?, stability=?, difficulty=?,
+                     scheduled_days=?, elapsed_days=?, reps=?, lapses=?
+                 WHERE item_id=?",
+            )
+            .bind(&scheduled.due_date)
+            .bind(format!(
+                "{}T00:00:00+00:00",
+                reviewed_date.format("%Y-%m-%d")
+            ))
+            .bind(scheduled.stability)
+            .bind(scheduled.difficulty)
+            .bind(scheduled.scheduled_days)
+            .bind(last_elapsed_days)
+            .bind(reps)
+            .bind(scheduled.lapses)
+            .bind(item_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn optimize_fsrs_parameters(
+    pool: State<'_, SqlitePool>,
+) -> Result<FsrsOptimizeResult, String> {
+    let settings = read_fsrs_settings(pool.inner()).await?;
+    let reviews = collect_training_reviews(pool.inner()).await?;
+    let starting_weights = if settings.weights.len() == 19 {
+        let mut parsed = [0.0; 19];
+        parsed.copy_from_slice(&settings.weights);
+        parsed
+    } else {
+        crate::fsrs::DEFAULT_FSRS_WEIGHTS
+    };
+
+    if reviews.len() < 20 {
+        return Ok(FsrsOptimizeResult {
+            updated: false,
+            message: "复习记录不足，至少需要 20 条复习日志再优化参数。".to_string(),
+            reviewed_count: reviews.len() as i64,
+            prediction_count: 0,
+            previous_loss: None,
+            optimized_loss: None,
+            settings,
+        });
+    }
+
+    let Some(result) = crate::fsrs::optimize_weights(
+        &reviews,
+        starting_weights,
+        settings.desired_retention,
+        settings.maximum_interval,
+    ) else {
+        return Ok(FsrsOptimizeResult {
+            updated: false,
+            message: "可用于训练的连续复习记录不足，先继续积累复习历史。".to_string(),
+            reviewed_count: reviews.len() as i64,
+            prediction_count: 0,
+            previous_loss: None,
+            optimized_loss: None,
+            settings,
+        });
+    };
+
+    let improved = result.optimized_loss + 0.0001 < result.previous_loss;
+    if !improved {
+        return Ok(FsrsOptimizeResult {
+            updated: false,
+            message: "当前参数已经适合现有记录，暂未覆盖。".to_string(),
+            reviewed_count: result.review_count,
+            prediction_count: result.prediction_count,
+            previous_loss: Some(result.previous_loss),
+            optimized_loss: Some(result.optimized_loss),
+            settings,
+        });
+    }
+
+    let optimized_at = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE review_settings
+         SET fsrs_weights=?, optimized_at=?, optimizer_review_count=?, optimizer_loss=?
+         WHERE id=1",
+    )
+    .bind(serde_json::to_string(&result.weights).map_err(|e| e.to_string())?)
+    .bind(&optimized_at)
+    .bind(result.review_count)
+    .bind(result.optimized_loss)
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let updated_settings = read_fsrs_settings(pool.inner()).await?;
+    rebuild_review_states_from_logs(pool.inner(), &updated_settings).await?;
+
+    Ok(FsrsOptimizeResult {
+        updated: true,
+        message: "FSRS 参数已根据本地复习记录优化，并已重算现有复习项状态。".to_string(),
+        reviewed_count: result.review_count,
+        prediction_count: result.prediction_count,
+        previous_loss: Some(result.previous_loss),
+        optimized_loss: Some(result.optimized_loss),
+        settings: updated_settings,
+    })
+}
+
+#[tauri::command]
+pub async fn set_event_review_enabled(
+    pool: State<'_, SqlitePool>,
+    event_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    if enabled {
+        crate::review::ensure_review_items_for_events(pool.inner(), &[event_id]).await
+    } else {
+        crate::review::deactivate_review_items_for_events(pool.inner(), &[event_id]).await
+    }
+}
+
+#[tauri::command]
+pub async fn review_item(
+    pool: State<'_, SqlitePool>,
+    item_id: String,
+    rating: String,
+    reviewed_at: Option<String>,
+) -> Result<ReviewItem, String> {
+    let row = sqlx::query(
+        "SELECT
+            ri.id, ri.title, ri.source_event_id, ri.project_id, ri.milestone_id,
+            ri.created_at, ri.is_active,
+            rs.due_date, rs.last_reviewed_at, rs.stability, rs.difficulty,
+            rs.scheduled_days, rs.elapsed_days, rs.reps, rs.lapses,
+            p.name AS project_name, m.name AS milestone_name
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         LEFT JOIN milestones m ON m.id = ri.milestone_id
+         WHERE ri.id = ?",
+    )
+    .bind(&item_id)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let previous_due_date: String = row.get("due_date");
+    let previous_stability: f64 = row.get("stability");
+    let previous_difficulty: f64 = row.get("difficulty");
+    let previous_reps: i64 = row.get("reps");
+    let previous_lapses: i64 = row.get("lapses");
+    let last_reviewed_at: Option<String> = row.get("last_reviewed_at");
+    let reviewed_at_value = reviewed_at.unwrap_or_else(|| Utc::now().to_rfc3339());
+    let reviewed_date = parse_ymd(&reviewed_at_value).unwrap_or_else(|| Utc::now().date_naive());
+    let elapsed_days = last_reviewed_at
+        .as_deref()
+        .and_then(parse_ymd)
+        .map(|last| (reviewed_date - last).num_days().max(0))
+        .unwrap_or(previous_reps.max(0));
+
+    let settings = read_fsrs_settings(pool.inner()).await?;
+    let weights = if settings.weights.len() == 19 {
+        let mut parsed = [0.0; 19];
+        parsed.copy_from_slice(&settings.weights);
+        parsed
+    } else {
+        crate::fsrs::DEFAULT_FSRS_WEIGHTS
+    };
+    let parsed_rating = crate::fsrs::rating_from_str(&rating).ok_or("未知复习评分")?;
+    let previous_state = if previous_reps == 0 {
+        None
+    } else {
+        Some(crate::fsrs::MemoryState {
+            stability: previous_stability,
+            difficulty: previous_difficulty,
+        })
+    };
+    let scheduled = crate::fsrs::schedule(
+        &weights,
+        settings.desired_retention,
+        settings.maximum_interval,
+        previous_state,
+        parsed_rating,
+        elapsed_days,
+        previous_lapses,
+        reviewed_date,
+    );
+
+    let log_id = Uuid::new_v4().to_string();
+    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO review_logs
+         (id, item_id, reviewed_at, rating, previous_due_date, next_due_date,
+          previous_stability, next_stability, previous_difficulty, next_difficulty, scheduled_days)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&log_id)
+    .bind(&item_id)
+    .bind(&reviewed_at_value)
+    .bind(rating.to_lowercase())
+    .bind(&previous_due_date)
+    .bind(&scheduled.due_date)
+    .bind(previous_stability)
+    .bind(scheduled.stability)
+    .bind(previous_difficulty)
+    .bind(scheduled.difficulty)
+    .bind(scheduled.scheduled_days)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "UPDATE review_states
+         SET due_date=?, last_reviewed_at=?, stability=?, difficulty=?,
+             scheduled_days=?, elapsed_days=?, reps=reps+1, lapses=?
+         WHERE item_id=?",
+    )
+    .bind(&scheduled.due_date)
+    .bind(&reviewed_at_value)
+    .bind(scheduled.stability)
+    .bind(scheduled.difficulty)
+    .bind(scheduled.scheduled_days)
+    .bind(elapsed_days)
+    .bind(scheduled.lapses)
+    .bind(&item_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    let updated = sqlx::query(
+        "SELECT
+            ri.id, ri.title, ri.source_event_id, ri.project_id, ri.milestone_id,
+            ri.created_at, ri.is_active,
+            rs.due_date, rs.last_reviewed_at, rs.stability, rs.difficulty,
+            rs.scheduled_days, rs.elapsed_days, rs.reps, rs.lapses,
+            p.name AS project_name, m.name AS milestone_name
+         FROM review_items ri
+         INNER JOIN review_states rs ON rs.item_id = ri.id
+         LEFT JOIN projects p ON p.id = ri.project_id
+         LEFT JOIN milestones m ON m.id = ri.milestone_id
+         WHERE ri.id = ?",
+    )
+    .bind(&item_id)
+    .fetch_one(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row_to_review_item(&updated))
+}
+
+// ══════════════════════════════════════════════════════════════
 // 备份 / 恢复 / Flutter 数据迁移
 // ══════════════════════════════════════════════════════════════
 
-/// 导出当前所有数据为 JSON 字符串（Tauri 格式 v5）
+/// 导出当前所有数据为 JSON 字符串（Tauri 格式 v8）
 #[tauri::command]
 pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String> {
     // 1. 项目
@@ -1004,10 +2021,11 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
         .collect();
 
     // 3. 日程
-    let event_rows = sqlx::query("SELECT * FROM calendar_events ORDER BY created_at")
-        .fetch_all(pool.inner())
-        .await
-        .map_err(|e| e.to_string())?;
+    let event_rows =
+        sqlx::query("SELECT * FROM calendar_events ORDER BY project_id, sort_order, created_at")
+            .fetch_all(pool.inner())
+            .await
+            .map_err(|e| e.to_string())?;
 
     let events: Vec<serde_json::Value> = event_rows
         .iter()
@@ -1023,6 +2041,7 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
                 "is_pinned":    r.get::<i64, _>("is_pinned") != 0,
                 "project_id":   r.get::<Option<String>, _>("project_id"),
                 "milestone_id": r.get::<Option<String>, _>("milestone_id"),
+                "sort_order":   r.get::<i64, _>("sort_order"),
             })
         })
         .collect();
@@ -1041,8 +2060,74 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
         weekly.entry(day.to_string()).or_default().push(pid);
     }
 
+    // 5. 复习计划
+    let review_item_rows = sqlx::query("SELECT * FROM review_items ORDER BY created_at")
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    let review_items: Vec<serde_json::Value> = review_item_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id":              r.get::<String, _>("id"),
+                "title":           r.get::<String, _>("title"),
+                "source_event_id": r.get::<Option<String>, _>("source_event_id"),
+                "project_id":      r.get::<Option<String>, _>("project_id"),
+                "milestone_id":    r.get::<Option<String>, _>("milestone_id"),
+                "created_at":      r.get::<String, _>("created_at"),
+                "is_active":       r.get::<i64, _>("is_active") != 0,
+            })
+        })
+        .collect();
+
+    let review_state_rows = sqlx::query("SELECT * FROM review_states ORDER BY due_date")
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    let review_states: Vec<serde_json::Value> = review_state_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "item_id":          r.get::<String, _>("item_id"),
+                "due_date":         r.get::<String, _>("due_date"),
+                "last_reviewed_at": r.get::<Option<String>, _>("last_reviewed_at"),
+                "stability":        r.get::<f64, _>("stability"),
+                "difficulty":       r.get::<f64, _>("difficulty"),
+                "scheduled_days":   r.get::<i64, _>("scheduled_days"),
+                "elapsed_days":     r.get::<i64, _>("elapsed_days"),
+                "reps":             r.get::<i64, _>("reps"),
+                "lapses":           r.get::<i64, _>("lapses"),
+            })
+        })
+        .collect();
+
+    let review_log_rows = sqlx::query("SELECT * FROM review_logs ORDER BY reviewed_at")
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    let review_logs: Vec<serde_json::Value> = review_log_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id":                  r.get::<String, _>("id"),
+                "item_id":             r.get::<String, _>("item_id"),
+                "reviewed_at":         r.get::<String, _>("reviewed_at"),
+                "rating":              r.get::<String, _>("rating"),
+                "previous_due_date":   r.get::<Option<String>, _>("previous_due_date"),
+                "next_due_date":       r.get::<String, _>("next_due_date"),
+                "previous_stability":  r.get::<Option<f64>, _>("previous_stability"),
+                "next_stability":      r.get::<f64, _>("next_stability"),
+                "previous_difficulty": r.get::<Option<f64>, _>("previous_difficulty"),
+                "next_difficulty":     r.get::<f64, _>("next_difficulty"),
+                "scheduled_days":      r.get::<i64, _>("scheduled_days"),
+            })
+        })
+        .collect();
+
+    let review_settings = read_fsrs_settings(pool.inner()).await?;
+
     let backup = serde_json::json!({
-        "version": 5,
+        "version": 8,
         "format": "courseflow_tauri",
         "timestamp": chrono::Local::now().to_rfc3339(),
         "data": {
@@ -1050,6 +2135,10 @@ pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<String, String
             "milestones": milestones,
             "events": events,
             "weekly_template": weekly,
+            "review_items": review_items,
+            "review_states": review_states,
+            "review_logs": review_logs,
+            "review_settings": review_settings,
         }
     });
 
@@ -1067,6 +2156,28 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
 
     // 清空
+    sqlx::query("DELETE FROM review_logs")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM review_states")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM review_items")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE review_settings
+         SET desired_retention=0.9, maximum_interval=36500, fsrs_weights=?,
+             optimized_at=NULL, optimizer_review_count=0, optimizer_loss=NULL
+         WHERE id=1",
+    )
+    .bind(crate::fsrs::default_weights_json())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM weekly_template")
         .execute(&mut *tx)
         .await
@@ -1086,6 +2197,7 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
 
     let mut project_count = 0u32;
     let mut event_count = 0u32;
+    let mut review_count = 0u32;
 
     // 写入项目
     if let Some(projects) = data.get("projects").and_then(|v| v.as_array()) {
@@ -1120,7 +2232,7 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
     // 写入日程
     if let Some(events) = data.get("events").and_then(|v| v.as_array()) {
         for e in events {
-            sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
                 .bind(e["id"].as_str().unwrap_or(""))
                 .bind(e["title"].as_str().unwrap_or(""))
                 .bind(e["date"].as_str())
@@ -1131,6 +2243,7 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
                 .bind(if e["is_pinned"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                 .bind(e["project_id"].as_str())
                 .bind(e["milestone_id"].as_str())
+                .bind(e["sort_order"].as_i64().unwrap_or(0))
                 .execute(&mut *tx).await.map_err(|e| e.to_string())?;
             event_count += 1;
         }
@@ -1153,10 +2266,107 @@ pub async fn import_backup(pool: State<'_, SqlitePool>, json: String) -> Result<
         }
     }
 
+    // 写入复习计划
+    if let Some(review_items) = data.get("review_items").and_then(|v| v.as_array()) {
+        for item in review_items {
+            sqlx::query(
+                "INSERT INTO review_items
+                 (id, title, source_event_id, project_id, milestone_id, created_at, is_active)
+                 VALUES (?,?,?,?,?,?,?)",
+            )
+            .bind(item["id"].as_str().unwrap_or(""))
+            .bind(item["title"].as_str().unwrap_or(""))
+            .bind(item["source_event_id"].as_str())
+            .bind(item["project_id"].as_str())
+            .bind(item["milestone_id"].as_str())
+            .bind(item["created_at"].as_str().unwrap_or(""))
+            .bind(if item["is_active"].as_bool().unwrap_or(true) {
+                1i64
+            } else {
+                0i64
+            })
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            review_count += 1;
+        }
+    }
+
+    if let Some(review_states) = data.get("review_states").and_then(|v| v.as_array()) {
+        for state in review_states {
+            sqlx::query(
+                "INSERT INTO review_states
+                 (item_id, due_date, last_reviewed_at, stability, difficulty,
+                  scheduled_days, elapsed_days, reps, lapses)
+                 VALUES (?,?,?,?,?,?,?,?,?)",
+            )
+            .bind(state["item_id"].as_str().unwrap_or(""))
+            .bind(state["due_date"].as_str().unwrap_or(""))
+            .bind(state["last_reviewed_at"].as_str())
+            .bind(state["stability"].as_f64().unwrap_or(1.0))
+            .bind(state["difficulty"].as_f64().unwrap_or(5.0))
+            .bind(state["scheduled_days"].as_i64().unwrap_or(1))
+            .bind(state["elapsed_days"].as_i64().unwrap_or(0))
+            .bind(state["reps"].as_i64().unwrap_or(0))
+            .bind(state["lapses"].as_i64().unwrap_or(0))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if let Some(review_logs) = data.get("review_logs").and_then(|v| v.as_array()) {
+        for log in review_logs {
+            sqlx::query(
+                "INSERT INTO review_logs
+                 (id, item_id, reviewed_at, rating, previous_due_date, next_due_date,
+                  previous_stability, next_stability, previous_difficulty, next_difficulty, scheduled_days)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            )
+            .bind(log["id"].as_str().unwrap_or(""))
+            .bind(log["item_id"].as_str().unwrap_or(""))
+            .bind(log["reviewed_at"].as_str().unwrap_or(""))
+            .bind(log["rating"].as_str().unwrap_or("good"))
+            .bind(log["previous_due_date"].as_str())
+            .bind(log["next_due_date"].as_str().unwrap_or(""))
+            .bind(log["previous_stability"].as_f64())
+            .bind(log["next_stability"].as_f64().unwrap_or(1.0))
+            .bind(log["previous_difficulty"].as_f64())
+            .bind(log["next_difficulty"].as_f64().unwrap_or(5.0))
+            .bind(log["scheduled_days"].as_i64().unwrap_or(1))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if let Some(settings) = data.get("review_settings") {
+        let weights = settings
+            .get("weights")
+            .and_then(|v| serde_json::to_string(v).ok())
+            .unwrap_or_else(crate::fsrs::default_weights_json);
+        sqlx::query(
+            "UPDATE review_settings
+             SET desired_retention=?, maximum_interval=?, fsrs_weights=?,
+                 optimized_at=?, optimizer_review_count=?, optimizer_loss=?
+             WHERE id=1",
+        )
+        .bind(settings["desired_retention"].as_f64().unwrap_or(0.9))
+        .bind(settings["maximum_interval"].as_i64().unwrap_or(36500))
+        .bind(weights)
+        .bind(settings["optimized_at"].as_str())
+        .bind(settings["optimizer_review_count"].as_i64().unwrap_or(0))
+        .bind(settings["optimizer_loss"].as_f64())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
     tx.commit().await.map_err(|e| e.to_string())?;
+    crate::review::backfill_completed_event_reviews(pool.inner()).await?;
     Ok(format!(
-        "已导入 {} 个项目、{} 条日程",
-        project_count, event_count
+        "已导入 {} 个项目、{} 条日程、{} 个复习项",
+        project_count, event_count, review_count
     ))
 }
 
@@ -1179,6 +2389,28 @@ pub async fn import_flutter_backup(
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
 
     // 清空
+    sqlx::query("DELETE FROM review_logs")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM review_states")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM review_items")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE review_settings
+         SET desired_retention=0.9, maximum_interval=36500, fsrs_weights=?,
+             optimized_at=NULL, optimizer_review_count=0, optimizer_loss=NULL
+         WHERE id=1",
+    )
+    .bind(crate::fsrs::default_weights_json())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM weekly_template")
         .execute(&mut *tx)
         .await
@@ -1226,7 +2458,7 @@ pub async fn import_flutter_backup(
             if let Some(events) = event_list.as_array() {
                 for ev in events {
                     let id = Uuid::new_v4().to_string();
-                    sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id) VALUES (?,?,?,?,?,?,?,?,?,NULL)")
+                    sqlx::query("INSERT INTO calendar_events (id, title, date, due_date, created_at, completed_at, is_completed, is_pinned, project_id, milestone_id, sort_order) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)")
                         .bind(&id)
                         .bind(ev["title"].as_str().unwrap_or(""))
                         .bind(date_str)
@@ -1236,6 +2468,7 @@ pub async fn import_flutter_backup(
                         .bind(if ev["isCompleted"].as_bool().unwrap_or(false) { 1i64 } else { 0i64 })
                         .bind(0i64)                                        // Flutter 无此字段，默认未锁定
                         .bind(ev["projectId"].as_str())                    // Flutter: projectId
+                        .bind(event_count as i64)
                         .execute(&mut *tx).await.map_err(|e| e.to_string())?;
                     event_count += 1;
                 }
@@ -1261,6 +2494,7 @@ pub async fn import_flutter_backup(
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+    crate::review::backfill_completed_event_reviews(pool.inner()).await?;
     Ok(format!(
         "已从 Flutter 备份导入 {} 个项目、{} 条日程",
         project_count, event_count

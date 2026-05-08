@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import {
   AlertCircle,
+  Brain,
   CalendarCheck,
   ChevronLeft,
   ChevronRight,
@@ -10,7 +11,6 @@ import {
   LockOpen,
   Palette,
   Pencil,
-  Plus,
   SlidersHorizontal,
   Trash2,
   X,
@@ -20,8 +20,10 @@ import { useEventStore, type CalendarEvent } from "../store/useEventStore";
 import { useProjectStore, type Project } from "../store/useProjectStore";
 import { useHabitStore, type HabitWithStats } from "../store/useHabitStore";
 import { useMilestoneStore } from "../store/useMilestoneStore";
+import { useReviewStore, type ReviewItem, type ReviewRating, type ReviewStats } from "../store/useReviewStore";
 import { useUiPreferencesStore, type TodayWorkbenchStyle } from "../store/useUiPreferencesStore";
 import { DateInput } from "../components/FormControls";
+import CompletionToggle from "../components/CompletionToggle";
 
 // ── 工具函数 ────────────────────────────────────────────────
 
@@ -30,6 +32,13 @@ function toDateStr(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function getLocalDayIsoRange(dateStr: string) {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const start = new Date(year, month - 1, day);
+  const end = new Date(year, month - 1, day + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
 }
 
 function colorToHex(val: number) {
@@ -77,8 +86,19 @@ type WeekDensity = "comfortable" | "compact";
 type MilestoneNameMap = Record<string, string>;
 
 type TodayWorkItem =
-  | { kind: "task"; id: string; event: CalendarEvent; completed: boolean }
+  | { kind: "task"; id: string; event: CalendarEvent; completed: boolean; completedTodayOnly?: boolean }
   | { kind: "habit"; id: string; habit: HabitWithStats; completed: boolean };
+
+const REVIEW_RATING_OPTIONS: Array<{
+  value: ReviewRating;
+  label: string;
+  className: string;
+}> = [
+  { value: "again", label: "忘记", className: "bg-red-500/10 text-red-400 hover:bg-red-500/15" },
+  { value: "hard", label: "困难", className: "bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/15" },
+  { value: "good", label: "正常", className: "bg-green-500/10 text-green-400 hover:bg-green-500/15" },
+  { value: "easy", label: "简单", className: "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15" },
+];
 
 function getMilestoneName(event: CalendarEvent, milestoneMap: MilestoneNameMap) {
   return event.milestone_id ? milestoneMap[event.milestone_id] ?? null : null;
@@ -238,8 +258,8 @@ function EventManagerDialog({
   );
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+    <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+      <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] p-6 w-full max-w-xl h-full shadow-2xl flex flex-col">
         {/* 标题 */}
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-[var(--text-primary)]">{parseInt(month)}月{parseInt(day)}日</h2>
@@ -304,11 +324,13 @@ function EventManagerDialog({
                 key={event.id}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--bg-muted)] group transition-colors"
               >
-                <input
-                  type="checkbox"
+                <CompletionToggle
                   checked={event.is_completed}
                   onChange={() => onToggle(event.id)}
-                  className="w-4 h-4 accent-indigo-500 flex-shrink-0 cursor-pointer"
+                  color="#6366f1"
+                  size="md"
+                  className="flex-shrink-0"
+                  ariaLabel={event.is_completed ? "取消完成任务" : "完成任务"}
                 />
                 {project && (
                   <div
@@ -465,11 +487,13 @@ function EventMiniRow({
 
   return (
     <div className="flex items-center gap-2 min-w-0 group">
-      <input
-        type="checkbox"
+      <CompletionToggle
         checked={event.is_completed}
         onChange={() => onToggle(event)}
-        className="w-3.5 h-3.5 accent-indigo-500 flex-shrink-0 cursor-pointer"
+        color={color}
+        size="sm"
+        className="flex-shrink-0"
+        ariaLabel={event.is_completed ? "取消完成任务" : "完成任务"}
       />
       <div className="w-1 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
       <button
@@ -522,11 +546,13 @@ function TodayWorkItemRow({
     const color = colorToHex(habit.color_value);
     return (
       <div className="flex items-center gap-2 min-w-0">
-        <input
-          type="checkbox"
+        <CompletionToggle
           checked={habit.completed_today}
           onChange={() => onToggleHabit(habit.id)}
-          className="w-3.5 h-3.5 accent-green-500 flex-shrink-0 cursor-pointer"
+          color={color}
+          size="sm"
+          className="flex-shrink-0"
+          ariaLabel={habit.completed_today ? "撤销习惯打卡" : "完成习惯打卡"}
         />
         <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
         <button
@@ -552,14 +578,22 @@ function TodayWorkItemRow({
   const project = event.project_id ? projectMap[event.project_id] : null;
   const color = project ? colorToHex(project.color_value) : "#6366f1";
   const milestoneName = getMilestoneName(event, milestoneMap);
+  const scheduleContext =
+    item.completedTodayOnly && event.date && event.date !== today
+      ? ` · 排期 ${event.date.slice(5)}`
+      : item.completedTodayOnly && !event.date
+      ? " · 待分配"
+      : "";
 
   return (
     <div className="flex items-center gap-2 min-w-0">
-      <input
-        type="checkbox"
+      <CompletionToggle
         checked={event.is_completed}
         onChange={() => onToggleEvent(event)}
-        className="w-3.5 h-3.5 accent-indigo-500 flex-shrink-0 cursor-pointer"
+        color={color}
+        size="sm"
+        className="flex-shrink-0"
+        ariaLabel={event.is_completed ? "取消完成任务" : "完成任务"}
       />
       <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
       <button
@@ -577,6 +611,8 @@ function TodayWorkItemRow({
         <p className="text-[10px] text-[var(--text-faint)] truncate">
           任务{project ? ` · ${project.name}` : ""}
           {milestoneName ? ` · ${milestoneName}` : ""}
+          {item.completedTodayOnly ? " · 今日完成" : ""}
+          {scheduleContext}
           {event.due_date && (
             <span className={dueTone(event, today)}> · {dueLabel(event.due_date)}</span>
           )}
@@ -586,43 +622,149 @@ function TodayWorkItemRow({
   );
 }
 
+function ReviewDueRow({
+  item,
+  today,
+  busy,
+  onReview,
+}: {
+  item: ReviewItem;
+  today: string;
+  busy: boolean;
+  onReview: (itemId: string, rating: ReviewRating) => void | Promise<void>;
+}) {
+  const isOverdue = item.due_date < today;
+  return (
+    <div className="rounded-lg bg-[var(--bg-muted)]/60 px-2.5 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-[var(--text-secondary)] truncate">{item.title}</p>
+          <p className="text-[10px] text-[var(--text-faint)] truncate">
+            {item.project_name ?? "无项目"}
+            {item.milestone_name ? ` · ${item.milestone_name}` : ""}
+          </p>
+        </div>
+        <span className={`text-[10px] flex-shrink-0 ${isOverdue ? "text-red-400" : "text-green-400"}`}>
+          {isOverdue ? `逾期 ${item.due_date.slice(5)}` : "今日"}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-4 gap-1">
+        {REVIEW_RATING_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            onClick={() => onReview(item.id, option.value)}
+            disabled={busy}
+            className={`rounded-md px-1.5 py-1 text-[10px] transition-colors disabled:opacity-40 ${option.className}`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReviewStatsSummary({ stats }: { stats: ReviewStats | null }) {
+  if (!stats) {
+    return (
+      <div className="rounded-lg bg-[var(--bg-muted)]/50 px-2.5 py-2 text-xs text-[var(--text-faint)]">
+        复习统计加载中
+      </div>
+    );
+  }
+
+  const ratingTotal =
+    stats.rating_counts_30_days.again +
+    stats.rating_counts_30_days.hard +
+    stats.rating_counts_30_days.good +
+    stats.rating_counts_30_days.easy;
+  const maxLoad = Math.max(1, ...stats.upcoming_load_7_days.map((item) => item.due_count));
+  const retentionText = ratingTotal > 0
+    ? `${Math.round(stats.retention_percent_30_days)}%`
+    : "暂无";
+
+  return (
+    <div className="rounded-lg border border-cyan-500/15 bg-cyan-500/5 px-2.5 py-2">
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div>
+          <p className="text-[10px] text-[var(--text-faint)]">活跃</p>
+          <p className="text-sm font-semibold text-[var(--text-primary)]">{stats.total_active}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-[var(--text-faint)]">今日</p>
+          <p className="text-sm font-semibold text-cyan-300">{stats.due_today}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-[var(--text-faint)]">逾期</p>
+          <p className="text-sm font-semibold text-red-400">{stats.overdue}</p>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-faint)]">
+        <span>7天到期 {stats.due_next_7_days}</span>
+        <span>今天已复习 {stats.reviewed_today}</span>
+        <span>近 7 天 {stats.reviewed_last_7_days}</span>
+        <span>记住率 {retentionText}</span>
+      </div>
+      <div className="mt-2 flex items-end gap-1 h-9" title="未来 7 天复习负载">
+        {stats.upcoming_load_7_days.map((item) => (
+          <div key={item.date} className="flex-1 flex flex-col items-center gap-1">
+            <div
+              className="w-full rounded-sm bg-cyan-400/60 min-h-1"
+              style={{ height: `${Math.max(4, (item.due_count / maxLoad) * 24)}px` }}
+            />
+            <span className="text-[9px] text-[var(--text-faint)]">{item.date.slice(5)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TodayWorkPanel({
   today,
   style,
   todayEvents,
+  completedTodayEvents,
   overdueEvents,
   unscheduledEvents,
+  dueReviewItems,
+  reviewStats,
   habits,
-  projects,
   projectMap,
   milestoneMap,
-  onAddToday,
   onToggleEvent,
   onToggleHabit,
+  onReviewItem,
   onOpenDate,
 }: {
   today: string;
   style: TodayWorkbenchStyle;
   todayEvents: CalendarEvent[];
+  completedTodayEvents: CalendarEvent[];
   overdueEvents: CalendarEvent[];
   unscheduledEvents: CalendarEvent[];
+  dueReviewItems: ReviewItem[];
+  reviewStats: ReviewStats | null;
   habits: HabitWithStats[];
-  projects: Project[];
   projectMap: Record<string, Project>;
   milestoneMap: MilestoneNameMap;
-  onAddToday: (title: string, projectId: string | null) => Promise<void>;
   onToggleEvent: (event: CalendarEvent) => void | Promise<void>;
   onToggleHabit: (habitId: string) => void | Promise<void>;
+  onReviewItem: (itemId: string, rating: ReviewRating) => void | Promise<void>;
   onOpenDate: (date: string) => void;
 }) {
-  const [title, setTitle] = useState("");
-  const [projectId, setProjectId] = useState<string | null>(projects[0]?.id ?? null);
-  const [saving, setSaving] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
 
   const todayTasks = useMemo(
     () => [...todayEvents].sort((a, b) => compareEvents(a, b, projectMap)),
     [todayEvents, projectMap]
   );
+  const completedTodayTasks = useMemo(() => {
+    const todayTaskIds = new Set(todayTasks.map((event) => event.id));
+    return completedTodayEvents
+      .filter((event) => event.is_completed && !todayTaskIds.has(event.id))
+      .sort((a, b) => compareEvents(a, b, projectMap));
+  }, [completedTodayEvents, todayTasks, projectMap]);
   const visibleOverdue = useMemo(
     () => [...overdueEvents].filter((e) => !e.is_completed).slice(0, 5),
     [overdueEvents]
@@ -646,6 +788,13 @@ function TodayWorkPanel({
         event,
         completed: event.is_completed,
       })),
+      ...completedTodayTasks.map((event) => ({
+        kind: "task" as const,
+        id: `completed-task-${event.id}`,
+        event,
+        completed: true,
+        completedTodayOnly: true,
+      })),
       ...todayHabits.map((habit) => ({
         kind: "habit" as const,
         id: `habit-${habit.id}`,
@@ -664,13 +813,14 @@ function TodayWorkPanel({
       }
       return a.kind === "task" ? -1 : 1;
     });
-  }, [todayTasks, todayHabits, projectMap]);
+  }, [todayTasks, completedTodayTasks, todayHabits, projectMap]);
   const openTodayItems = todayWorkItems.filter((item) => !item.completed).length;
   const completedTodayItems = todayWorkItems.length - openTodayItems;
+  const visibleDueReviews = dueReviewItems.slice(0, 5);
   const useCardLayout = style === "cards";
   const panelGridClass = useCardLayout
-    ? "grid grid-cols-1 xl:grid-cols-[1.05fr_1.45fr_1fr_1fr] gap-3"
-    : "grid grid-cols-1 xl:grid-cols-[1.05fr_1.45fr_1fr_1fr] rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)]/30 divide-y xl:divide-y-0 xl:divide-x divide-[var(--border-default)] overflow-hidden";
+    ? "grid grid-cols-1 xl:grid-cols-[1.35fr_1.15fr_1fr_1fr] gap-3"
+    : "grid grid-cols-1 xl:grid-cols-[1.35fr_1.15fr_1fr_1fr] rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)]/30 divide-y xl:divide-y-0 xl:divide-x divide-[var(--border-default)] overflow-hidden";
   const panelSectionClass = useCardLayout
     ? "rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] p-3 min-w-0"
     : "p-3 min-w-0";
@@ -678,14 +828,12 @@ function TodayWorkPanel({
     ? "rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 min-w-0"
     : "p-3 min-w-0 bg-yellow-500/5";
 
-  async function handleAdd() {
-    if (!title.trim()) return;
-    setSaving(true);
+  async function handleReview(itemId: string, rating: ReviewRating) {
+    setReviewingId(itemId);
     try {
-      await onAddToday(title.trim(), projectId);
-      setTitle("");
+      await onReviewItem(itemId, rating);
     } finally {
-      setSaving(false);
+      setReviewingId(null);
     }
   }
 
@@ -699,35 +847,12 @@ function TodayWorkPanel({
         <div className="flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
           <span>{openTodayItems} 个待执行</span>
           <span>{completedTodayItems}/{todayWorkItems.length} 今日完成</span>
+          <span>{dueReviewItems.length} 个复习</span>
           <span>{visibleOverdue.length} 个逾期</span>
         </div>
       </div>
 
       <div className={panelGridClass}>
-        <div className={panelSectionClass}>
-          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
-            <Plus size={15} className="text-indigo-400" />
-            快速添加
-          </div>
-          <ProjectSelect projects={projects} value={projectId} onChange={setProjectId} />
-          <div className="flex gap-2 mt-2">
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-              className="flex-1 min-w-0 bg-[var(--bg-muted)] text-[var(--text-primary)] rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="添加到今天…"
-            />
-            <button
-              onClick={handleAdd}
-              disabled={saving || !title.trim()}
-              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-50 transition-colors"
-            >
-              添加
-            </button>
-          </div>
-        </div>
-
         <div className={panelSectionClass}>
           <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
             <CalendarCheck size={15} className="text-green-400" />
@@ -748,6 +873,33 @@ function TodayWorkPanel({
             ))}
             {todayWorkItems.length === 0 && (
               <span className="text-xs text-[var(--text-faint)]">今天没有执行项</span>
+            )}
+          </div>
+        </div>
+
+        <div className={panelSectionClass}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] mb-2">
+            <Brain size={15} className="text-cyan-400" />
+            今日复习
+          </div>
+          <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+            <ReviewStatsSummary stats={reviewStats} />
+            {visibleDueReviews.map((item) => (
+              <ReviewDueRow
+                key={item.id}
+                item={item}
+                today={today}
+                busy={reviewingId === item.id}
+                onReview={handleReview}
+              />
+            ))}
+            {visibleDueReviews.length === 0 && (
+              <span className="text-xs text-[var(--text-faint)]">今天没有到期复习</span>
+            )}
+            {dueReviewItems.length > visibleDueReviews.length && (
+              <span className="text-[10px] text-[var(--text-faint)]">
+                还有 {dueReviewItems.length - visibleDueReviews.length} 个复习项
+              </span>
             )}
           </div>
         </div>
@@ -946,12 +1098,14 @@ function WeekEventRow({
       style={accentStyle}
       title={event.is_pinned ? "已锁定，不能拖拽移动" : "拖拽到其他日期"}
     >
-      <input
-        type="checkbox"
+      <CompletionToggle
         checked={event.is_completed}
-        onClick={(e) => e.stopPropagation()}
         onChange={() => onToggle(event)}
-        className={`${isCompact ? "w-3 h-3" : "w-3.5 h-3.5"} mt-0.5 accent-indigo-500 flex-shrink-0 cursor-pointer`}
+        color={color}
+        size={isCompact ? "sm" : "md"}
+        className="mt-0.5 flex-shrink-0"
+        stopPropagation
+        ariaLabel={event.is_completed ? "取消完成任务" : "完成任务"}
       />
       <button
         onClick={() => event.date && onOpenDate(event.date)}
@@ -1197,6 +1351,7 @@ export default function DashboardPage() {
   const { projects, projectMap, load: loadProjects } = useProjectStore();
   const { habits, load: loadHabits, toggle: toggleHabit } = useHabitStore();
   const { milestonesByProject, load: loadMilestones } = useMilestoneStore();
+  const { dueItems, stats: reviewStats, loadDue, loadStats, submitReview } = useReviewStore();
   const { todayWorkbenchStyle } = useUiPreferencesStore();
 
   const today = new Date();
@@ -1210,6 +1365,7 @@ export default function DashboardPage() {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [projectStats, setProjectStats] = useState<Record<string, [number, number]>>({});
+  const [completedTodayEvents, setCompletedTodayEvents] = useState<CalendarEvent[]>([]);
 
   const year = focusedDate.getFullYear();
   const month = focusedDate.getMonth() + 1;
@@ -1226,6 +1382,12 @@ export default function DashboardPage() {
     setProjectStats(stats);
   }
 
+  async function loadCompletedToday() {
+    const { start, end } = getLocalDayIsoRange(todayStr);
+    const events = await invoke<CalendarEvent[]>("get_events_completed_between", { start, end });
+    setCompletedTodayEvents(events);
+  }
+
   // 切换月份/周时加载可见范围数据
   useEffect(() => {
     const visibleMonths = new Set([getYearMonth(focusedDate), getYearMonth(today)]);
@@ -1239,19 +1401,18 @@ export default function DashboardPage() {
       loadUnscheduled(),
       loadOverdue(todayStr),
       loadHabits(todayStr),
+      loadDue(todayStr),
+      loadStats(todayStr),
+      loadCompletedToday(),
       loadProjects(),
       loadProjectStats(),
     ]).finally(() => setLoaded(true));
   }, [year, month, viewMode, weekStartStr, weekEndStr, todayStr]);
 
-  async function handleAddToday(title: string, projectId: string | null) {
-    await addEvent(title, projectId, todayStr);
-    await loadProjectStats();
-  }
-
   async function handleToggleEvent(event: CalendarEvent) {
     await toggle(event.id, event.date);
     await loadProjectStats();
+    await Promise.all([loadDue(todayStr), loadStats(todayStr), loadCompletedToday()]);
   }
 
   async function handleMoveEvent(event: CalendarEvent, targetDate: string) {
@@ -1261,6 +1422,10 @@ export default function DashboardPage() {
 
   async function handleToggleHabit(habitId: string) {
     await toggleHabit(habitId, todayStr);
+  }
+
+  async function handleReviewItem(itemId: string, rating: ReviewRating) {
+    await submitReview(itemId, rating, todayStr);
   }
 
   function changePeriod(offset: number) {
@@ -1312,6 +1477,7 @@ export default function DashboardPage() {
     : [];
 
   const todayEvents = (eventsByDate[todayStr] ?? []).filter(isVisibleEvent);
+  const visibleCompletedTodayEvents = completedTodayEvents.filter(isVisibleEvent);
   const visibleOverdue = overdue.filter(isVisibleEvent);
   const visibleUnscheduled = unscheduled.filter(isVisibleEvent);
   const weekEventsByDate = useMemo(() => {
@@ -1341,15 +1507,17 @@ export default function DashboardPage() {
         today={todayStr}
         style={todayWorkbenchStyle}
         todayEvents={todayEvents}
+        completedTodayEvents={visibleCompletedTodayEvents}
         overdueEvents={visibleOverdue}
         unscheduledEvents={visibleUnscheduled}
+        dueReviewItems={dueItems}
+        reviewStats={reviewStats}
         habits={habits}
-        projects={sortedProjects}
         projectMap={activeProjectMap}
         milestoneMap={milestoneMap}
-        onAddToday={handleAddToday}
         onToggleEvent={handleToggleEvent}
         onToggleHabit={handleToggleHabit}
+        onReviewItem={handleReviewItem}
         onOpenDate={setSelectedDay}
       />
 

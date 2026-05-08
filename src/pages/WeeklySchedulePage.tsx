@@ -89,8 +89,7 @@ function ReschedulePreviewDialog({
   const visibleChanges = changes.slice(0, 80);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
-      <div className="w-full max-w-2xl max-h-[82vh] bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-2xl shadow-2xl flex flex-col">
+    <section className="mt-5 bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-2xl shadow-xl flex flex-col max-h-[560px]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-default)]">
           <div>
             <h2 className="text-lg font-semibold text-[var(--text-primary)]">重排预览</h2>
@@ -153,8 +152,7 @@ function ReschedulePreviewDialog({
             {saving ? "应用中…" : "确认重排"}
           </button>
         </div>
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -179,11 +177,11 @@ function DayCard({
   const isWeekend = dayKey === "6" || dayKey === "7";
 
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl p-5">
+    <div className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-xl p-3 min-h-[360px] flex flex-col">
       {/* 标题行 */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between gap-2 mb-3">
         <span
-          className={`text-sm font-bold px-2.5 py-0.5 rounded-lg ${
+          className={`text-xs font-bold px-2 py-0.5 rounded-lg ${
             isWeekend
               ? "bg-orange-500/10 text-orange-400"
               : "bg-indigo-500/10 text-indigo-400"
@@ -191,15 +189,15 @@ function DayCard({
         >
           {dayLabel}
         </span>
-        <span className="text-xs text-[var(--text-faint)]">
+        <span className="text-[10px] text-[var(--text-faint)]">
           {selectedIds.length === 0
             ? "休息日"
-            : `安排 ${selectedIds.length} 科`}
+            : `${selectedIds.length} 科`}
         </span>
       </div>
 
       {/* 项目 Chip 列表 */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto pr-1">
         {projects.map((project) => {
           const selected = selectedIds.includes(project.id);
           const hex = colorToHex(project.color_value);
@@ -217,16 +215,16 @@ function DayCard({
                     }
                   : {}
               }
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+              className={`w-full min-w-0 px-2 py-1.5 rounded-lg text-xs font-medium border transition-all text-left ${
                 selected
                   ? "border-current font-bold"
                   : "border-[var(--border-strong)] text-[var(--text-muted)] hover:border-[var(--bg-inactive)] hover:text-[var(--text-tertiary)]"
               }`}
             >
-              {project.name}
+              <span className="block truncate">{project.name}</span>
               {pending > 0 && (
-                <span className={`ml-1 text-[10px] ${selected ? "opacity-70" : "text-[var(--text-faint)]"}`}>
-                  ({pending})
+                <span className={`block text-[10px] ${selected ? "opacity-70" : "text-[var(--text-faint)]"}`}>
+                  待分配 {pending}
                 </span>
               )}
             </button>
@@ -485,94 +483,111 @@ export default function WeeklySchedulePage() {
     .reduce((sum, [, c]) => sum + c, 0);
 
   return (
-    <div className="p-8 max-w-2xl mx-auto min-h-full pb-32">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-6 xl:p-8 max-w-[1700px] mx-auto min-h-full">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">周规划配置</h1>
-          <p className="text-[var(--text-muted)] text-sm">设置每天学习的科目，保存后自动分配日程</p>
+          <p className="text-[var(--text-muted)] text-sm">设置每天学习的项目，保存后自动分配日程</p>
         </div>
-        <button
-          onClick={clearAll}
-          className="flex items-center gap-1.5 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors px-3 py-2 rounded-xl hover:bg-[var(--bg-elevated)]"
-          title="清空所有选中"
-        >
-          <Eraser size={15} />
-          清空
-        </button>
-      </div>
-
-      {/* 待分配统计 */}
-      {totalPending > 0 && (
-        <div className="flex items-center gap-2 text-sm text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded-xl px-4 py-3 mb-6">
-          <AlertCircle size={15} />
-          当前管理的项目共有 {totalPending} 条待分配日程
-        </div>
-      )}
-
-      {/* 7 天卡片 */}
-      <div className="flex flex-col gap-4 mb-8">
-        {WEEK_DAYS.map(({ key, label }) => (
-          <DayCard
-            key={key}
-            dayKey={key}
-            dayLabel={label}
-            selectedIds={visibleDraft[key] ?? []}
-            projects={sortedProjects}
-            pendingCounts={pendingCounts}
-            onToggle={(pid) => toggleProject(key, pid)}
-          />
-        ))}
-      </div>
-
-      {/* 保存错误提示 */}
-      {saveError && (
-        <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 mb-6">
-          <AlertCircle size={16} />
-          保存失败：{saveError}
-        </div>
-      )}
-
-      {/* 上次重排结果提示 */}
-      {lastCount !== null && (
-        <div className="flex items-center gap-3 text-sm text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 mb-6">
-          <CalendarCheck size={16} className="flex-shrink-0" />
-          <span className="flex-1">已应用 {lastCount} 项排程变更</span>
-          {lastUndo && (
-            <button
-              onClick={handleUndoReschedule}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 transition-colors"
-            >
-              <RotateCcw size={13} />
-              撤销
-            </button>
+        <div className="flex items-center gap-2">
+          {isDirty && !saving && (
+            <span className="text-xs text-yellow-500 bg-yellow-500/10 px-3 py-1.5 rounded-full">
+              未保存
+            </span>
           )}
+          <button
+            onClick={clearAll}
+            className="inline-flex items-center gap-1.5 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors px-3 py-2 rounded-xl hover:bg-[var(--bg-elevated)]"
+            title="清空所有选中"
+          >
+            <Eraser size={15} />
+            清空
+          </button>
+          <button
+            onClick={handleSaveAndApply}
+            disabled={saving}
+            className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-5 py-2 rounded-xl text-sm font-semibold transition-colors"
+          >
+            <Wand2 size={17} />
+            {saving ? "重排中…" : "保存并重排"}
+          </button>
         </div>
-      )}
+      </div>
 
-      {undoCount !== null && (
-        <div className="flex items-center gap-2 text-sm text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3 mb-6">
-          <RotateCcw size={16} />
-          已撤销 {undoCount} 项排程变更
-        </div>
-      )}
+      <div className="grid grid-cols-1 2xl:grid-cols-[260px_minmax(0,1fr)] gap-5">
+        <aside className="2xl:sticky 2xl:top-6 self-start rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] p-4">
+          <p className="text-sm font-semibold text-[var(--text-primary)] mb-3">排程状态</p>
+          <div className="grid grid-cols-3 2xl:grid-cols-1 gap-2">
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">管理项目</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">{managedIds.size}</p>
+            </div>
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">待分配</p>
+              <p className="text-base font-semibold text-yellow-400">{totalPending}</p>
+            </div>
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">状态</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">{isDirty ? "未保存" : "已同步"}</p>
+            </div>
+          </div>
 
-      {/* 保存按钮（固定底部）*/}
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-3">
-        {isDirty && !saving && (
-          <span className="text-xs text-yellow-500 bg-yellow-500/10 px-3 py-1.5 rounded-full">
-            未保存
-          </span>
-        )}
-        <button
-          onClick={handleSaveAndApply}
-          disabled={saving}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-8 py-3 rounded-2xl text-sm font-semibold shadow-xl transition-all"
-        >
-          <Wand2 size={17} />
-          {saving ? "重排中…" : "保存并重排日程"}
-        </button>
+          <div className="mt-4 space-y-2">
+            {saveError && (
+              <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
+                <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                <span>保存失败：{saveError}</span>
+              </div>
+            )}
+            {lastCount !== null && (
+              <div className="flex items-start gap-2 text-sm text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-3 py-2">
+                <CalendarCheck size={16} className="mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p>已应用 {lastCount} 项排程变更</p>
+                  {lastUndo && (
+                    <button
+                      onClick={handleUndoReschedule}
+                      disabled={saving}
+                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 transition-colors"
+                    >
+                      <RotateCcw size={13} />
+                      撤销
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {undoCount !== null && (
+              <div className="flex items-center gap-2 text-sm text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-3 py-2">
+                <RotateCcw size={16} />
+                已撤销 {undoCount} 项排程变更
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <main className="min-w-0">
+          {totalPending > 0 && (
+            <div className="flex items-center gap-2 text-sm text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded-xl px-4 py-3 mb-4">
+              <AlertCircle size={15} />
+              当前管理的项目共有 {totalPending} 条待分配日程
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7 gap-3">
+            {WEEK_DAYS.map(({ key, label }) => (
+              <DayCard
+                key={key}
+                dayKey={key}
+                dayLabel={label}
+                selectedIds={visibleDraft[key] ?? []}
+                projects={sortedProjects}
+                pendingCounts={pendingCounts}
+                onToggle={(pid) => toggleProject(key, pid)}
+              />
+            ))}
+          </div>
+        </main>
       </div>
 
       {previewChanges && (

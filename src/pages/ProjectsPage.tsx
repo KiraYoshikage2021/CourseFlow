@@ -438,6 +438,11 @@ export default function ProjectsPage() {
 
   const hasProjectFilters = projectQuery.trim() !== "" || progressFilter !== "all";
   const canReorder = view === "active" && !hasProjectFilters;
+  const activeProjectsCount = projects.filter((project) => !project.is_archived).length;
+  const archivedProjectsCount = projects.length - activeProjectsCount;
+  const totalTasks = Object.values(projectStats).reduce((sum, [total]) => sum + total, 0);
+  const completedTasks = Object.values(projectStats).reduce((sum, [, done]) => sum + done, 0);
+  const completionRate = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
 
   useEffect(() => {
     setLocalOrder(visibleProjects);
@@ -486,105 +491,147 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="p-8 max-w-2xl mx-auto min-h-full">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-6 xl:p-8 max-w-[1500px] mx-auto min-h-full">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">项目管理</h1>
-          <p className="text-[var(--text-muted)] text-sm">拖动 <GripVertical size={12} className="inline" /> 图标调整进行中项目的优先级</p>
+          <p className="text-[var(--text-muted)] text-sm">
+            拖动 <GripVertical size={12} className="inline" /> 图标调整进行中项目的优先级
+          </p>
         </div>
         <button
           onClick={() => setDialog({ type: "editor" })}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
+          className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
         >
           <Plus size={16} />新建项目
         </button>
       </div>
 
-      <div className="flex items-center gap-2 mb-5">
-        {(["active", "archived"] as const).map((key) => (
-          <button
-            key={key}
-            onClick={() => setView(key)}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              view === key
-                ? "bg-indigo-600 text-white"
-                : "bg-[var(--bg-card)] text-[var(--text-tertiary)] hover:bg-[var(--bg-elevated)]"
-            }`}
-          >
-            {key === "active" ? "进行中" : "已归档"}
-          </button>
-        ))}
-      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-5">
+        <aside className="xl:sticky xl:top-6 self-start rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] p-4">
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">进行中</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">{activeProjectsCount}</p>
+            </div>
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">归档</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">{archivedProjectsCount}</p>
+            </div>
+            <div className="rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+              <p className="text-[10px] text-[var(--text-faint)]">完成率</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">{completionRate}%</p>
+            </div>
+          </div>
 
-      <div className="flex flex-col gap-2 mb-5">
-        <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
-          <input
-            value={projectQuery}
-            onChange={(e) => setProjectQuery(e.target.value)}
-            className="w-full bg-[var(--bg-card)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-xl pl-9 pr-3 py-2 text-sm outline-none focus:border-indigo-500"
-            placeholder="搜索项目"
-          />
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {([
-            ["all", "全部进度"],
-            ["incomplete", "未完成"],
-            ["completed", "已完成"],
-            ["empty", "无任务"],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setProgressFilter(key)}
-              className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
-                progressFilter === key
-                  ? "bg-indigo-600 text-white"
-                  : "bg-[var(--bg-card)] text-[var(--text-tertiary)] hover:bg-[var(--bg-elevated)]"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+          <div className="flex items-center rounded-xl bg-[var(--bg-muted)] p-1 mb-4">
+            {(["active", "archived"] as const).map((key) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                  view === key
+                    ? "bg-indigo-600 text-white"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {key === "active" ? "进行中" : "已归档"}
+              </button>
+            ))}
+          </div>
 
-      {/* 内容区 */}
-      {!loaded ? (
-        <div className="text-[var(--text-faint)] text-center py-20">加载中…</div>
-      ) : localOrder.length === 0 ? (
-        <div className="text-center py-20 flex flex-col items-center gap-4">
-          <FolderOpen size={52} className="text-[var(--text-faintest)]" />
-          <p className="text-[var(--text-tertiary)] font-medium">
-            {hasProjectFilters ? "没有匹配的项目" : view === "active" ? "还没有进行中的项目" : "暂无归档项目"}
-          </p>
-          <p className="text-[var(--text-faint)] text-sm">
-            {hasProjectFilters ? "调整搜索词或筛选条件" : view === "active" ? "点击右上角「新建项目」开始" : "完成后的项目可以在这里恢复"}
-          </p>
-        </div>
-      ) : (
-        <ReorderableList
-          items={localOrder}
-          onReorder={handleReorder}
-          renderItem={(project, _index, isDragOver, dragHandlers) => (
-            <ProjectCard
-              project={project}
-              highlighted={highlighted === project.id}
-              isDragOver={isDragOver}
-              stats={projectStats[project.id]}
-              milestones={milestonesByProject[project.id]}
-              canReorder={canReorder}
-              onDragStart={dragHandlers.onDragStart}
-              onDragEnd={dragHandlers.onDragEnd}
-              onOpenDetails={() => {
-                setHighlighted(project.id);
-                navigate(`/projects/${project.id}`);
-              }}
-              onDelete={() => setDialog({ type: "confirmDelete", project })}
+          <div className="relative mb-3">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
+            <input
+              value={projectQuery}
+              onChange={(e) => setProjectQuery(e.target.value)}
+              className="w-full bg-[var(--bg-muted)] border border-[var(--border-default)] text-[var(--text-primary)] rounded-xl pl-9 pr-3 py-2 text-sm outline-none focus:border-indigo-500"
+              placeholder="搜索项目"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            {([
+              ["all", "全部进度"],
+              ["incomplete", "未完成"],
+              ["completed", "已完成"],
+              ["empty", "无任务"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setProgressFilter(key)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${
+                  progressFilter === key
+                    ? "bg-indigo-600 text-white"
+                    : "text-[var(--text-tertiary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <main className="min-w-0">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <p className="text-sm font-semibold text-[var(--text-primary)]">
+                {view === "active" ? "进行中项目" : "归档项目"}
+              </p>
+              <p className="text-xs text-[var(--text-faint)]">
+                当前显示 {localOrder.length} 个项目{canReorder ? " · 可拖拽排序" : ""}
+              </p>
+            </div>
+            {hasProjectFilters && (
+              <button
+                onClick={() => {
+                  setProjectQuery("");
+                  setProgressFilter("all");
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[var(--bg-card)] text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-elevated)] transition-colors"
+              >
+                清除筛选
+              </button>
+            )}
+          </div>
+
+          {!loaded ? (
+            <div className="text-[var(--text-faint)] text-center py-20">加载中…</div>
+          ) : localOrder.length === 0 ? (
+            <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] text-center py-20 flex flex-col items-center gap-4">
+              <FolderOpen size={52} className="text-[var(--text-faintest)]" />
+              <p className="text-[var(--text-tertiary)] font-medium">
+                {hasProjectFilters ? "没有匹配的项目" : view === "active" ? "还没有进行中的项目" : "暂无归档项目"}
+              </p>
+              <p className="text-[var(--text-faint)] text-sm">
+                {hasProjectFilters ? "调整搜索词或筛选条件" : view === "active" ? "点击右上角「新建项目」开始" : "完成后的项目可以在这里恢复"}
+              </p>
+            </div>
+          ) : (
+            <ReorderableList
+              items={localOrder}
+              onReorder={handleReorder}
+              renderItem={(project, _index, isDragOver, dragHandlers) => (
+                <ProjectCard
+                  project={project}
+                  highlighted={highlighted === project.id}
+                  isDragOver={isDragOver}
+                  stats={projectStats[project.id]}
+                  milestones={milestonesByProject[project.id]}
+                  canReorder={canReorder}
+                  onDragStart={dragHandlers.onDragStart}
+                  onDragEnd={dragHandlers.onDragEnd}
+                  onOpenDetails={() => {
+                    setHighlighted(project.id);
+                    navigate(`/projects/${project.id}`);
+                  }}
+                  onDelete={() => setDialog({ type: "confirmDelete", project })}
+                />
+              )}
             />
           )}
-        />
-      )}
+        </main>
+      </div>
 
       {/* 弹窗 */}
       {dialog?.type === "editor" && (

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, Flame, Pencil, Trash2, X, Check, BarChart2 } from "lucide-react";
+import { Plus, Flame, Pencil, Trash2, X, BarChart2 } from "lucide-react";
 import { useHabitStore, HabitWithStats } from "../store/useHabitStore";
+import CompletionToggle from "../components/CompletionToggle";
 
 // ── 工具函数 ─────────────────────────────────────────────────
 
@@ -205,8 +206,8 @@ function HistoryModal({
 
   if (completions === null) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 text-[var(--text-tertiary)] text-sm">
+      <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+        <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] p-6 w-full max-w-lg h-full shadow-2xl text-[var(--text-tertiary)] text-sm">
           加载中…
         </div>
       </div>
@@ -247,8 +248,8 @@ function HistoryModal({
       : Math.round((completedThisMonth / scheduledThisMonth.length) * 100);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-md shadow-2xl">
+    <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+      <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] p-6 w-full max-w-lg h-full shadow-2xl overflow-y-auto">
         {/* 标题 */}
         <div className="flex items-center gap-2 mb-5">
           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
@@ -436,17 +437,15 @@ function HabitCard({
         </button>
 
         {habit.scheduled_today && (
-          <button
-            onClick={onToggle}
-            className={`ml-1 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
-              habit.completed_today
-                ? "bg-green-500 text-white hover:bg-green-600"
-                : "border-2 border-[var(--border-default)] text-transparent hover:border-indigo-400"
-            }`}
+          <CompletionToggle
+            checked={habit.completed_today}
+            onChange={onToggle}
+            color={color}
+            size="lg"
+            className="ml-1"
             title={habit.completed_today ? "撤销打卡" : "打卡"}
-          >
-            <Check size={14} />
-          </button>
+            ariaLabel={habit.completed_today ? "撤销习惯打卡" : "完成习惯打卡"}
+          />
         )}
       </div>
     </div>

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  AlertTriangle, ArrowLeft, Archive, BarChart3, CheckCircle2, Circle, ClipboardList, Flag,
+  AlertTriangle, ArrowLeft, Archive, BarChart3, Brain, CheckCircle2, Circle, ClipboardList, Flag, GripVertical,
   LayoutList, ListChecks, Pencil, Plus, PlusCircle, RotateCcw, Save, Search, Settings, Trash2, X,
 } from "lucide-react";
 import { useProjectStore, type Difficulty, type Project } from "../store/useProjectStore";
@@ -12,7 +12,9 @@ import {
   type MilestoneStatus,
   type MilestoneWithStats,
 } from "../store/useMilestoneStore";
+import { useReviewStore } from "../store/useReviewStore";
 import { AppSelect, DateInput } from "../components/FormControls";
+import CompletionToggle from "../components/CompletionToggle";
 
 function colorToHex(val: number) {
   return "#" + (val & 0xffffff).toString(16).padStart(6, "0");
@@ -33,6 +35,21 @@ function compareOpenTasks(a: CalendarEvent, b: CalendarEvent) {
   const dateCompare = taskSortDate(a).localeCompare(taskSortDate(b));
   if (dateCompare !== 0) return dateCompare;
   return a.title.localeCompare(b.title, "zh-Hans");
+}
+
+function practiceTaskTitle(title: string) {
+  return `${title.trim()}：巩固练习`;
+}
+
+function isPracticeTaskTitle(title: string) {
+  const normalized = title.trim().toLowerCase();
+  return normalized.endsWith("：巩固练习") || normalized.endsWith(": consolidation practice");
+}
+
+function dateFromOffset(baseDate: string, offset: PracticeDueOffset) {
+  if (offset === "none") return null;
+  const [year, month, day] = baseDate.split("-").map(Number);
+  return toDateStr(new Date(year, month - 1, day + Number(offset)));
 }
 
 const STATUS_LABEL: Record<MilestoneStatus, string> = {
@@ -61,6 +78,8 @@ const DIFFICULTY_LABEL: Record<Difficulty, string> = {
 
 type TaskStatusFilter = "all" | "open" | "completed";
 type TaskScheduleFilter = "all" | "scheduled" | "unscheduled";
+type TaskAutoSortMode = "milestone" | "title" | "due_date" | "date" | "incomplete_first" | "created_at";
+type PracticeDueOffset = "none" | "1" | "3" | "7";
 type DetailTab = "overview" | "tasks" | "statistics" | "settings";
 type TaskViewMode = "flat" | "grouped";
 type TaskGroup = {
@@ -70,6 +89,36 @@ type TaskGroup = {
   events: CalendarEvent[];
 };
 type DetailDialog = MilestoneWithStats | "add" | "batchAdd" | null;
+type PracticePreviewCreate = {
+  source: CalendarEvent;
+  title: string;
+  milestone_id: string | null;
+  due_date: string | null;
+};
+type PracticePreviewSkip = {
+  source: CalendarEvent;
+  title: string;
+  reason: string;
+};
+
+const TASK_AUTO_SORT_OPTIONS = [
+  { value: "manual", label: "自动排序" },
+  { value: "milestone", label: "按阶段顺序" },
+  { value: "title", label: "按任务名字" },
+  { value: "due_date", label: "按截止日期" },
+  { value: "date", label: "按排期日期" },
+  { value: "incomplete_first", label: "未完成优先" },
+  { value: "created_at", label: "按创建时间" },
+];
+
+const PRACTICE_DUE_OFFSET_OPTIONS = [
+  { value: "none", label: "无截止" },
+  { value: "1", label: "明天" },
+  { value: "3", label: "3 天后" },
+  { value: "7", label: "7 天后" },
+];
+
+type TaskSortSelectValue = TaskAutoSortMode | "manual";
 
 function MilestoneDialog({
   milestone,
@@ -104,8 +153,8 @@ function MilestoneDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+    <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+      <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] p-6 w-full max-w-md h-full shadow-2xl overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-lg font-semibold text-[var(--text-primary)]">
             {milestone ? "编辑阶段" : "新增阶段"}
@@ -245,8 +294,8 @@ function BatchAddDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-[var(--bg-elevated)] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+    <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+      <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] p-6 w-full max-w-md h-full shadow-2xl overflow-y-auto">
         <div className="flex items-center gap-2 mb-5">
           <div
             className="w-3 h-3 rounded-full flex-shrink-0"
@@ -375,8 +424,9 @@ export default function ProjectDetailPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const { projectMap, load: loadProjects, update: updateProject, archive, restore, remove: removeProject } = useProjectStore();
-  const { deleteByProject } = useEventStore();
+  const { deleteByProject, batchCompleteEvents, batchUncompleteEvents } = useEventStore();
   const { milestonesByProject, load: loadMilestones, add, update, remove } = useMilestoneStore();
+  const { projectItemsByProject, loadProjectItems, setEventReviewEnabled } = useReviewStore();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<DetailDialog>(null);
@@ -394,12 +444,28 @@ export default function ProjectDetailPage() {
   const lastSelectedTaskIndex = useRef<number | null>(null);
   const [batchMilestoneId, setBatchMilestoneId] = useState("");
   const [batchAssigning, setBatchAssigning] = useState(false);
+  const [autoSorting, setAutoSorting] = useState(false);
+  const [taskSortMode, setTaskSortMode] = useState<TaskSortSelectValue>("manual");
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+  const [reorderingTasks, setReorderingTasks] = useState(false);
+  const [generatingPractice, setGeneratingPractice] = useState(false);
+  const [showPracticePreview, setShowPracticePreview] = useState(false);
+  const [practiceInheritMilestone, setPracticeInheritMilestone] = useState(true);
+  const [practiceDueOffset, setPracticeDueOffset] = useState<PracticeDueOffset>("none");
+  const [practiceAutoSortByTitle, setPracticeAutoSortByTitle] = useState(true);
+  const [lastGeneratedPracticeIds, setLastGeneratedPracticeIds] = useState<string[]>([]);
+  const [undoingPractice, setUndoingPractice] = useState(false);
+  const [practiceSummary, setPracticeSummary] = useState("");
+  const [batchAddToReview, setBatchAddToReview] = useState(true);
+  const [busyReviewEventId, setBusyReviewEventId] = useState<string | null>(null);
   const [settingsName, setSettingsName] = useState("");
   const [settingsDifficulty, setSettingsDifficulty] = useState<Difficulty>("low");
   const [savingSettings, setSavingSettings] = useState(false);
 
   const project = projectMap[projectId];
   const milestones = milestonesByProject[projectId] ?? [];
+  const reviewItems = projectItemsByProject[projectId] ?? [];
   const today = toDateStr(new Date());
 
   async function loadEvents() {
@@ -408,7 +474,7 @@ export default function ProjectDetailPage() {
   }
 
   useEffect(() => {
-    Promise.all([loadProjects(), loadMilestones(projectId), loadEvents()])
+    Promise.all([loadProjects(), loadMilestones(projectId), loadEvents(), loadProjectItems(projectId)])
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -426,6 +492,12 @@ export default function ProjectDetailPage() {
     setSettingsDifficulty(project.difficulty);
   }, [project]);
 
+  useEffect(() => {
+    if (selectedTaskIds.size === 0) {
+      setShowPracticePreview(false);
+    }
+  }, [selectedTaskIds.size]);
+
   const stats = useMemo(() => {
     const total = events.length;
     const done = events.filter((e) => e.is_completed).length;
@@ -438,9 +510,34 @@ export default function ProjectDetailPage() {
     return { total, done, open, unassigned, scheduled, unscheduled, overdue, dueToday };
   }, [events, today]);
 
+  const learningLoopStats = useMemo(() => {
+    const sourceTasks = events.filter((event) => !isPracticeTaskTitle(event.title));
+    const practiceTasks = events.filter((event) => isPracticeTaskTitle(event.title));
+    const completedPractice = practiceTasks.filter((event) => event.is_completed).length;
+    const practiceCompletion =
+      practiceTasks.length === 0 ? 0 : Math.round((completedPractice / practiceTasks.length) * 100);
+    const dueReview = reviewItems.filter((item) => item.is_active && item.due_date <= today).length;
+    return {
+      sourceTasks: sourceTasks.length,
+      practiceTasks: practiceTasks.length,
+      completedPractice,
+      practiceCompletion,
+      dueReview,
+    };
+  }, [events, reviewItems, today]);
+
   const milestoneMap = useMemo(
     () => Object.fromEntries(milestones.map((m) => [m.id, m])),
     [milestones]
+  );
+  const reviewItemByEventId = useMemo(
+    () =>
+      Object.fromEntries(
+        reviewItems
+          .filter((item) => item.source_event_id && item.is_active)
+          .map((item) => [item.source_event_id as string, item])
+      ),
+    [reviewItems]
   );
   const milestoneFilterOptions = useMemo(
     () => [
@@ -489,6 +586,12 @@ export default function ProjectDetailPage() {
     taskStatusFilter !== "all" ||
     taskScheduleFilter !== "all" ||
     taskMilestoneFilter !== "all";
+  const canManualSort =
+    !!project &&
+    !project.is_archived &&
+    taskViewMode === "flat" &&
+    !hasTaskFilters &&
+    filteredEvents.length > 1;
   const visibleTaskIds = useMemo(
     () => filteredEvents.map((event) => event.id),
     [filteredEvents]
@@ -509,6 +612,40 @@ export default function ProjectDetailPage() {
     selectedEvents.length > 0 && selectedEvents.every((event) => !event.is_completed);
   const selectedCompletedCount = selectedEvents.filter((event) => event.is_completed).length;
   const selectedOpenCount = selectedEvents.length - selectedCompletedCount;
+  const practicePreview = useMemo(() => {
+    const existingKeys = new Set(
+      events.map((event) => `${event.milestone_id ?? ""}::${event.title.trim()}`)
+    );
+    const generatedKeys = new Set<string>();
+    const toCreate: PracticePreviewCreate[] = [];
+    const skipped: PracticePreviewSkip[] = [];
+    const dueDate = dateFromOffset(today, practiceDueOffset);
+
+    for (const source of selectedEvents) {
+      const title = practiceTaskTitle(source.title);
+      const milestoneId = practiceInheritMilestone ? source.milestone_id ?? null : null;
+      const key = `${milestoneId ?? ""}::${title}`;
+
+      if (isPracticeTaskTitle(source.title)) {
+        skipped.push({ source, title, reason: "选中项已经是巩固练习" });
+        continue;
+      }
+      if (existingKeys.has(key) || generatedKeys.has(key)) {
+        skipped.push({ source, title, reason: "同阶段已有同名巩固练习" });
+        continue;
+      }
+
+      generatedKeys.add(key);
+      toCreate.push({
+        source,
+        title,
+        milestone_id: milestoneId,
+        due_date: dueDate,
+      });
+    }
+
+    return { toCreate, skipped };
+  }, [events, practiceDueOffset, practiceInheritMilestone, selectedEvents, today]);
   const milestoneStats = useMemo(() => {
     const total = milestones.length;
     const completed = milestones.filter((m) => m.status === "completed" || (m.total > 0 && m.done >= m.total)).length;
@@ -609,8 +746,7 @@ export default function ProjectDetailPage() {
     const ok = window.confirm(`删除「${milestone.name}」吗？相关任务会变为未分阶段。`);
     if (!ok) return;
     await remove(milestone.id, projectId);
-    await loadMilestones(projectId);
-    await loadEvents();
+    await Promise.all([loadMilestones(projectId), loadEvents(), loadProjectItems(projectId)]);
   }
 
   async function assignMilestone(eventId: string, milestoneId: string) {
@@ -625,7 +761,7 @@ export default function ProjectDetailPage() {
           event.id === eventId ? { ...event, milestone_id: milestoneId || null } : event
         )
       );
-      await loadMilestones(projectId);
+      await Promise.all([loadMilestones(projectId), loadProjectItems(projectId)]);
     } finally {
       setBusyEventId(null);
     }
@@ -693,10 +829,97 @@ export default function ProjectDetailPage() {
       );
       setSelectedTaskIds(new Set());
       lastSelectedTaskIndex.current = null;
-      await loadMilestones(projectId);
+      await Promise.all([loadMilestones(projectId), loadProjectItems(projectId)]);
     } finally {
       setBatchAssigning(false);
     }
+  }
+
+  async function handleAutoSortTasks(mode: string) {
+    if (mode === "manual" || autoSorting) return;
+    const nextMode = mode as TaskAutoSortMode;
+    setTaskSortMode(nextMode);
+    setAutoSorting(true);
+    try {
+      await invoke("auto_sort_project_tasks", {
+        projectId,
+        mode: nextMode,
+      });
+      lastSelectedTaskIndex.current = null;
+      await loadEvents();
+    } catch (e) {
+      console.error("auto_sort_project_tasks 失败:", e);
+      setTaskSortMode("manual");
+    } finally {
+      setAutoSorting(false);
+    }
+  }
+
+  function getReorderedTaskIds(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return null;
+    const ids = events.map((event) => event.id);
+    const sourceIndex = ids.indexOf(sourceId);
+    const targetIndex = ids.indexOf(targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return null;
+    const next = [...ids];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    return next;
+  }
+
+  function applyLocalTaskOrder(orderedIds: string[]) {
+    const orderMap = new Map(orderedIds.map((id, index) => [id, index]));
+    setEvents((prev) =>
+      [...prev]
+        .sort((a, b) => (orderMap.get(a.id) ?? prev.length) - (orderMap.get(b.id) ?? prev.length))
+        .map((event, index) => ({ ...event, sort_order: index }))
+    );
+  }
+
+  function handleTaskDragStart(eventId: string, e: DragEvent<HTMLButtonElement>) {
+    if (!canManualSort || reorderingTasks) return;
+    setDraggingTaskId(eventId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", eventId);
+  }
+
+  function handleTaskDragOver(eventId: string, e: DragEvent<HTMLDivElement>) {
+    if (!canManualSort || !draggingTaskId || draggingTaskId === eventId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverTaskId(eventId);
+  }
+
+  async function handleTaskDrop(targetId: string, e: DragEvent<HTMLDivElement>) {
+    if (!canManualSort) return;
+    e.preventDefault();
+    const sourceId = draggingTaskId ?? e.dataTransfer.getData("text/plain");
+    const orderedIds = getReorderedTaskIds(sourceId, targetId);
+    setDraggingTaskId(null);
+    setDragOverTaskId(null);
+    if (!orderedIds) return;
+
+    const previousEvents = events;
+    setReorderingTasks(true);
+    setTaskSortMode("manual");
+    applyLocalTaskOrder(orderedIds);
+    try {
+      await invoke("reorder_project_tasks", {
+        projectId,
+        orderedEventIds: orderedIds,
+      });
+      await loadEvents();
+    } catch (e) {
+      console.error("reorder_project_tasks 失败:", e);
+      setEvents(previousEvents);
+    } finally {
+      setReorderingTasks(false);
+    }
+  }
+
+  function handleTaskDragEnd() {
+    setDraggingTaskId(null);
+    setDragOverTaskId(null);
   }
 
   async function handleBatchSetCompletion(isCompleted: boolean) {
@@ -706,7 +929,11 @@ export default function ProjectDetailPage() {
     const completedAt = isCompleted ? new Date().toISOString() : null;
     setBatchAssigning(true);
     try {
-      await invoke(isCompleted ? "batch_complete_events" : "batch_uncomplete_events", { ids });
+      if (isCompleted) {
+        await batchCompleteEvents(ids, batchAddToReview);
+      } else {
+        await batchUncompleteEvents(ids);
+      }
       setEvents((prev) =>
         prev.map((event) =>
           idSet.has(event.id) ? { ...event, is_completed: isCompleted, completed_at: completedAt } : event
@@ -714,9 +941,69 @@ export default function ProjectDetailPage() {
       );
       setSelectedTaskIds(new Set());
       lastSelectedTaskIndex.current = null;
-      await loadMilestones(projectId);
+      await Promise.all([loadMilestones(projectId), loadProjectItems(projectId)]);
     } finally {
       setBatchAssigning(false);
+    }
+  }
+
+  async function handleGeneratePracticeTasks() {
+    if (!project || practicePreview.toCreate.length === 0 || generatingPractice) return;
+
+    const now = new Date().toISOString();
+    const practiceEvents: CalendarEvent[] = practicePreview.toCreate.map((item) => ({
+        id: crypto.randomUUID(),
+        title: item.title,
+        date: null,
+        due_date: item.due_date,
+        created_at: now,
+        is_completed: false,
+        is_pinned: false,
+        project_id: project.id,
+        milestone_id: item.milestone_id,
+    }));
+
+    setGeneratingPractice(true);
+    setPracticeSummary("");
+    try {
+      await invoke("add_events_batch", { events: practiceEvents });
+      if (practiceAutoSortByTitle) {
+        await invoke("auto_sort_project_tasks", { projectId, mode: "title" });
+        setTaskSortMode("title");
+      }
+      setSelectedTaskIds(new Set());
+      lastSelectedTaskIndex.current = null;
+      setShowPracticePreview(false);
+      setLastGeneratedPracticeIds(practiceEvents.map((event) => event.id));
+      setPracticeSummary(
+        `已生成 ${practiceEvents.length} 个巩固练习${practicePreview.skipped.length > 0 ? `，跳过 ${practicePreview.skipped.length} 项` : ""}${practiceAutoSortByTitle ? "，已按任务名排序" : ""}`
+      );
+      await Promise.all([loadEvents(), loadMilestones(projectId), loadProjectItems(projectId)]);
+    } finally {
+      setGeneratingPractice(false);
+    }
+  }
+
+  async function handleUndoPracticeGeneration() {
+    if (lastGeneratedPracticeIds.length === 0 || undoingPractice) return;
+    const ids = [...lastGeneratedPracticeIds];
+    setUndoingPractice(true);
+    try {
+      await invoke("batch_delete_events", { ids });
+      setLastGeneratedPracticeIds([]);
+      setPracticeSummary(`已撤销 ${ids.length} 个巩固练习`);
+      await Promise.all([loadEvents(), loadMilestones(projectId), loadProjectItems(projectId)]);
+    } finally {
+      setUndoingPractice(false);
+    }
+  }
+
+  async function handleSetTaskReview(event: CalendarEvent, enabled: boolean) {
+    setBusyReviewEventId(event.id);
+    try {
+      await setEventReviewEnabled(event.id, enabled, projectId);
+    } finally {
+      setBusyReviewEventId(null);
     }
   }
 
@@ -887,7 +1174,10 @@ export default function ProjectDetailPage() {
 
   const renderTaskRow = (event: CalendarEvent) => {
     const milestone = event.milestone_id ? milestoneMap[event.milestone_id] : null;
+    const reviewItem = reviewItemByEventId[event.id];
     const isSelected = selectedTaskIds.has(event.id);
+    const isDragging = draggingTaskId === event.id;
+    const isDragOver = dragOverTaskId === event.id && draggingTaskId !== event.id;
     const isOverdue = !event.is_completed && !!event.due_date && event.due_date < today;
     const isDueToday = !event.is_completed && event.due_date === today;
     const milestoneLabelClass = milestone
@@ -906,10 +1196,28 @@ export default function ProjectDetailPage() {
     return (
       <div
         key={event.id}
+        onDragOver={(e) => handleTaskDragOver(event.id, e)}
+        onDrop={(e) => void handleTaskDrop(event.id, e)}
         className={`flex items-start gap-3 px-4 py-3 transition-colors ${
           isSelected ? "bg-indigo-500/10" : ""
+        } ${isDragging ? "opacity-50" : ""} ${
+          isDragOver ? "bg-indigo-500/15 ring-1 ring-inset ring-indigo-400/40" : ""
         }`}
       >
+        {canManualSort && (
+          <button
+            type="button"
+            draggable={!reorderingTasks}
+            onDragStart={(e) => handleTaskDragStart(event.id, e)}
+            onDragEnd={handleTaskDragEnd}
+            disabled={reorderingTasks}
+            className="mt-1 -ml-1 rounded-md p-1 text-[var(--text-faint)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-secondary)] disabled:opacity-40 cursor-grab active:cursor-grabbing flex-shrink-0 transition-colors"
+            title="拖拽调整任务顺序"
+            aria-label="拖拽调整任务顺序"
+          >
+            <GripVertical size={15} />
+          </button>
+        )}
         {!project.is_archived && (
           <input
             type="checkbox"
@@ -920,11 +1228,15 @@ export default function ProjectDetailPage() {
             title="选择任务（Shift 范围选择，Ctrl 保留多选）"
           />
         )}
-        {event.is_completed ? (
-          <CheckCircle2 size={16} className="mt-1 text-green-500 flex-shrink-0" />
-        ) : (
-          <Circle size={16} className="mt-1 text-[var(--text-muted)] flex-shrink-0" />
-        )}
+        <CompletionToggle
+          checked={event.is_completed}
+          color="#22c55e"
+          size="md"
+          readOnly
+          className="mt-1 flex-shrink-0"
+          title={event.is_completed ? "已完成" : "未完成"}
+          ariaLabel={event.is_completed ? "已完成" : "未完成"}
+        />
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium truncate ${event.is_completed ? "line-through text-[var(--text-muted)]" : "text-[var(--text-primary)]"}`}>
             {event.title}
@@ -939,6 +1251,26 @@ export default function ProjectDetailPage() {
             <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] leading-4 ${dueLabelClass}`}>
               {isOverdue ? "已逾期" : isDueToday ? "今日到期" : event.due_date ? `截止 ${event.due_date}` : "无截止"}
             </span>
+            {event.is_completed && (
+              <label
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] leading-4 ${
+                  reviewItem
+                    ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-300"
+                    : "border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-faint)]"
+                }`}
+                title={reviewItem ? `下次复习 ${reviewItem.due_date}` : "不加入复习计划"}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!reviewItem}
+                  disabled={project.is_archived || busyReviewEventId === event.id}
+                  onChange={(e) => handleSetTaskReview(event, e.target.checked)}
+                  className="w-3 h-3 accent-cyan-500"
+                />
+                <Brain size={11} />
+                {reviewItem ? `复习 ${reviewItem.due_date.slice(5)}` : "不复习"}
+              </label>
+            )}
           </div>
         </div>
         <AppSelect
@@ -1249,6 +1581,45 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </section>
+          <section className="bg-[var(--bg-card)] border border-[var(--border-default)] rounded-xl p-4">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[var(--text-secondary)]">学习闭环</h2>
+                <p className="text-xs text-[var(--text-faint)] mt-1">
+                  区分输入任务、巩固练习和到期复习，判断项目是否真的练过。
+                </p>
+              </div>
+              <span className="text-xs text-[var(--text-muted)]">
+                练习完成 {learningLoopStats.completedPractice}/{learningLoopStats.practiceTasks}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 divide-x divide-[var(--border-default)] border-y border-[var(--border-default)]">
+              {[
+                ["原始任务", learningLoopStats.sourceTasks, "听课/阅读/输入"],
+                ["巩固练习", learningLoopStats.practiceTasks, "做题/输出任务"],
+                ["练习完成率", `${learningLoopStats.practiceCompletion}%`, `${learningLoopStats.completedPractice}/${learningLoopStats.practiceTasks} 已完成`],
+                ["待复习", learningLoopStats.dueReview, "FSRS 到期项目"],
+              ].map(([label, value, hint]) => (
+                <div key={label} className="px-4 py-3">
+                  <p className="text-xs text-[var(--text-muted)] mb-1">{label}</p>
+                  <p className="text-2xl font-bold text-[var(--text-primary)]">{value}</p>
+                  <p className="text-[10px] text-[var(--text-faint)] mt-1">{hint}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-[var(--text-muted)]">巩固练习完成度</span>
+                <span className="text-[var(--text-tertiary)]">{learningLoopStats.practiceCompletion}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-[var(--bg-muted)] overflow-hidden">
+                <div
+                  className="h-full bg-cyan-500"
+                  style={{ width: `${learningLoopStats.practiceCompletion}%` }}
+                />
+              </div>
+            </div>
+          </section>
         </div>
       )}
 
@@ -1469,6 +1840,16 @@ export default function ProjectDetailPage() {
                 <ListChecks size={14} />
                 {allVisibleTasksSelected ? "取消当前选择" : "选择当前"}
               </button>
+              <AppSelect
+                value={taskSortMode}
+                onChange={(value) => void handleAutoSortTasks(value)}
+                options={TASK_AUTO_SORT_OPTIONS}
+                disabled={autoSorting || reorderingTasks || events.length <= 1}
+                className="w-36"
+                buttonClassName="bg-[var(--bg-elevated)] py-1.5 text-xs"
+                menuClassName="w-44"
+                title="按规则重排全部项目任务"
+              />
               <span className="text-xs text-[var(--text-muted)]">
                 已选 {selectedEvents.length} 项 · {selectedOpenCount} 未完成 · {selectedCompletedCount} 已完成
               </span>
@@ -1483,15 +1864,35 @@ export default function ProjectDetailPage() {
                   />
                   <button
                     onClick={handleBatchAssignMilestone}
-                    disabled={batchAssigning}
+                    disabled={batchAssigning || generatingPractice}
                     className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-500 disabled:opacity-50 transition-colors"
                   >
                     分配阶段
                   </button>
+                  <button
+                    onClick={() => setShowPracticePreview(true)}
+                    disabled={generatingPractice || batchAssigning}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/80 text-white text-xs hover:bg-cyan-500 disabled:opacity-50 transition-colors"
+                    title="为选中任务生成待分配的巩固练习任务"
+                  >
+                    <PlusCircle size={13} />
+                    预览巩固练习
+                  </button>
+                  {!allSelectedCompleted && (
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[var(--bg-elevated)] text-xs text-[var(--text-secondary)]">
+                      <input
+                        type="checkbox"
+                        checked={batchAddToReview}
+                        onChange={(e) => setBatchAddToReview(e.target.checked)}
+                        className="w-3.5 h-3.5 accent-cyan-500"
+                      />
+                      完成后加入复习
+                    </label>
+                  )}
                   {allSelectedCompleted ? (
                     <button
                       onClick={() => handleBatchSetCompletion(false)}
-                      disabled={batchAssigning}
+                      disabled={batchAssigning || generatingPractice}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-yellow-600/80 text-white text-xs hover:bg-yellow-500 disabled:opacity-50 transition-colors"
                     >
                       <Circle size={13} />
@@ -1500,7 +1901,7 @@ export default function ProjectDetailPage() {
                   ) : allSelectedOpen ? (
                     <button
                       onClick={() => handleBatchSetCompletion(true)}
-                      disabled={batchAssigning}
+                      disabled={batchAssigning || generatingPractice}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/80 text-white text-xs hover:bg-green-500 disabled:opacity-50 transition-colors"
                     >
                       <CheckCircle2 size={13} />
@@ -1510,7 +1911,7 @@ export default function ProjectDetailPage() {
                     <>
                       <button
                         onClick={() => handleBatchSetCompletion(false)}
-                        disabled={batchAssigning}
+                        disabled={batchAssigning || generatingPractice}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-yellow-600/80 text-white text-xs hover:bg-yellow-500 disabled:opacity-50 transition-colors"
                       >
                         <Circle size={13} />
@@ -1518,7 +1919,7 @@ export default function ProjectDetailPage() {
                       </button>
                       <button
                         onClick={() => handleBatchSetCompletion(true)}
-                        disabled={batchAssigning}
+                        disabled={batchAssigning || generatingPractice}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/80 text-white text-xs hover:bg-green-500 disabled:opacity-50 transition-colors"
                       >
                         <CheckCircle2 size={13} />
@@ -1531,12 +1932,26 @@ export default function ProjectDetailPage() {
                       setSelectedTaskIds(new Set());
                       lastSelectedTaskIndex.current = null;
                     }}
-                    disabled={batchAssigning}
+                    disabled={batchAssigning || generatingPractice}
                     className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-elevated)] text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)] disabled:opacity-50 transition-colors"
                   >
                     清除
                   </button>
                 </>
+              )}
+              {practiceSummary && (
+                <span className="inline-flex items-center gap-2 text-xs text-cyan-300">
+                  {practiceSummary}
+                  {lastGeneratedPracticeIds.length > 0 && (
+                    <button
+                      onClick={() => void handleUndoPracticeGeneration()}
+                      disabled={undoingPractice}
+                      className="rounded-md bg-cyan-500/10 px-2 py-1 text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+                    >
+                      {undoingPractice ? "撤销中" : "撤销"}
+                    </button>
+                  )}
+                </span>
               )}
             </div>
           )}
@@ -1607,6 +2022,126 @@ export default function ProjectDetailPage() {
           </div>
         </section>
       </div>
+      )}
+
+      {showPracticePreview && (
+        <div className="fixed inset-0 bg-black/35 backdrop-blur-sm flex justify-end z-50">
+          <div className="bg-[var(--bg-elevated)] border-l border-[var(--border-default)] w-full max-w-xl h-full shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border-default)] px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--text-primary)]">生成巩固练习</h2>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  将为选中任务生成待分配练习，重复项会自动跳过。
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPracticePreview(false)}
+                className="p-2 rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)] transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="border-b border-[var(--border-default)] px-5 py-4">
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2">
+                  <p className="text-[10px] text-[var(--text-muted)]">选中任务</p>
+                  <p className="text-lg font-bold text-[var(--text-primary)]">{selectedEvents.length}</p>
+                </div>
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2">
+                  <p className="text-[10px] text-cyan-300">将生成</p>
+                  <p className="text-lg font-bold text-cyan-200">{practicePreview.toCreate.length}</p>
+                </div>
+                <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-3 py-2">
+                  <p className="text-[10px] text-yellow-500">将跳过</p>
+                  <p className="text-lg font-bold text-yellow-400">{practicePreview.skipped.length}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-sm text-[var(--text-secondary)]">
+                  <input
+                    type="checkbox"
+                    checked={practiceInheritMilestone}
+                    onChange={(e) => setPracticeInheritMilestone(e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500"
+                  />
+                  继承原任务阶段
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-sm text-[var(--text-secondary)]">
+                  <input
+                    type="checkbox"
+                    checked={practiceAutoSortByTitle}
+                    onChange={(e) => setPracticeAutoSortByTitle(e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500"
+                  />
+                  生成后按任务名排序
+                </label>
+                <div>
+                  <p className="text-xs text-[var(--text-muted)] mb-1.5">截止日期</p>
+                  <AppSelect
+                    value={practiceDueOffset}
+                    onChange={(value) => setPracticeDueOffset(value as PracticeDueOffset)}
+                    options={PRACTICE_DUE_OFFSET_OPTIONS}
+                    buttonClassName="bg-[var(--bg-card)]"
+                    title="巩固练习截止日期"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <section className="mb-5">
+                <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-2">将生成</h3>
+                <div className="divide-y divide-[var(--border-default)] border-y border-[var(--border-default)]">
+                  {practicePreview.toCreate.map((item) => (
+                    <div key={item.source.id} className="py-2">
+                      <p className="text-sm text-[var(--text-primary)] truncate">{item.title}</p>
+                      <p className="text-[11px] text-[var(--text-faint)] mt-1">
+                        {item.milestone_id ? milestoneMap[item.milestone_id]?.name ?? "未知阶段" : "未分阶段"}
+                        {item.due_date ? ` · 截止 ${item.due_date}` : " · 无截止"}
+                      </p>
+                    </div>
+                  ))}
+                  {practicePreview.toCreate.length === 0 && (
+                    <p className="py-4 text-sm text-[var(--text-faint)]">没有可生成的新巩固练习</p>
+                  )}
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-2">将跳过</h3>
+                <div className="divide-y divide-[var(--border-default)] border-y border-[var(--border-default)]">
+                  {practicePreview.skipped.map((item) => (
+                    <div key={item.source.id} className="py-2">
+                      <p className="text-sm text-[var(--text-muted)] truncate">{item.title}</p>
+                      <p className="text-[11px] text-yellow-500 mt-1">{item.reason}</p>
+                    </div>
+                  ))}
+                  {practicePreview.skipped.length === 0 && (
+                    <p className="py-4 text-sm text-[var(--text-faint)]">没有需要跳过的项目</p>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className="flex items-center gap-3 border-t border-[var(--border-default)] px-5 py-4">
+              <button
+                onClick={() => setShowPracticePreview(false)}
+                className="flex-1 rounded-lg bg-[var(--bg-muted)] px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleGeneratePracticeTasks()}
+                disabled={generatingPractice || practicePreview.toCreate.length === 0}
+                className="flex-1 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50 transition-colors"
+              >
+                {generatingPractice ? "生成中..." : `生成 ${practicePreview.toCreate.length} 个`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {dialog === "batchAdd" && (

@@ -168,6 +168,86 @@ Useful filters:
 - Tasks by milestone
 - Tasks by project
 
+### 9. Spaced Review Reminders
+
+Add a review reminder system based on a modern spaced repetition algorithm.
+
+Status: MVP implemented. Completed tasks are backfilled into a review plan on startup, newly completed tasks default to review, Project Detail allows manual review opt-out, Dashboard shows due review items, and reviews support forgot / hard / good / easy ratings with review logs.
+
+Useful behavior:
+
+- Allow completed tasks or selected project items to be added to a review plan.
+- Show due review items on Dashboard.
+- Let the user rate recall as forgot / hard / good / easy.
+- Use the rating to calculate the next review date.
+- Keep review logs for future statistics and parameter tuning.
+
+Remaining follow-ups:
+
+- Add optional system notifications and a preferred reminder time.
+- Add review statistics once enough review history exists. Status: implemented as a Dashboard summary with active review count, due/overdue counts, reviewed counts, 30-day rating retention, and 7-day review load.
+- Replace the current FSRS-compatible MVP scheduler with a full FSRS library/parameter optimization if needed. Status: implemented with FSRS-5 19-weight scheduling, local review-log parameter optimization, Settings-page optimization control, and backup/export of FSRS settings.
+
+### 10. Project Task Ordering
+
+Status: implemented. Task ordering now uses persistent `calendar_events.sort_order`, initial backfill for existing tasks, Project Detail auto-sort options, backup/import support, auto-scheduling reading project tasks by `sort_order`, and manual drag reordering in the flat unfiltered Project Detail task list.
+
+Problem:
+
+Project tasks currently rely mostly on creation time, scheduled date, milestone grouping, and completion state. When a project grows, this can make the task order drift away from the intended learning or execution order. Auto-scheduling then inherits the wrong order, so tasks may be placed into the weekly plan in a sequence that does not match how the project should actually be done.
+
+Goal:
+
+- Add a stable task order inside each project.
+- Support automatic ordering for common cases, such as milestone order, due date, scheduled date, completion state, and creation time.
+- Support manual ordering when the user wants to override the automatic order.
+- Make auto-scheduling consume the same project task order so the visible project order and generated schedule stay consistent.
+
+Implementation approach:
+
+- Add a `sort_order` column to `calendar_events`, scoped by `project_id`. Backfill existing project tasks by current project order: milestone sort order, uncompleted before completed, scheduled date, due date, creation time.
+- Update project task queries to order by `sort_order` first, then stable fallbacks.
+- Add task reordering commands, for example `reorder_project_tasks(project_id, ordered_event_ids)`.
+- In Project Detail, add drag handles for manual ordering in the flat task list and probably within each milestone group. Disable or clearly constrain drag reorder when a filtered/search view is active.
+- Add an "auto sort" action with options such as by milestone, task name, due date, scheduled date, incomplete first, or created time. Task-name sorting is useful after generating `{原任务名}：巩固练习` tasks because each practice task can stay adjacent to its source task. Auto sort should write the resulting `sort_order`, not just change the temporary UI sort.
+- Update auto-scheduling so it pulls unscheduled project tasks in `sort_order` order, optionally prioritizing the current milestone first.
+- Backup/import should include `sort_order` so the user does not lose manual task order.
+
+### 11. Batch Generate Consolidation Practice Tasks
+
+Status: implemented as an MVP. Project Detail selected-task batch actions can generate `{原任务名}：巩固练习` tasks. Generated practice tasks inherit the same project and milestone, stay unscheduled by default, and duplicate matching practice tasks are skipped automatically.
+
+Problem:
+
+After finishing a batch of study tasks, the app can already send completed tasks into the review system, but it does not help the user create concrete follow-up practice work. Some learning workflows need a separate "consolidation practice" task for each selected task, for example exercises, past-paper questions, recitation, or active recall practice tied to the original item.
+
+Goal:
+
+- Let the user select multiple project tasks and generate one matching "consolidation practice" task for each selected task.
+- Keep generated tasks linked to the same project and milestone by default.
+- Make the generated task names predictable and editable enough to avoid noisy duplicates.
+- Optionally schedule the generated tasks later, send them into review when completed, and keep them separate from the source tasks.
+
+Implementation approach:
+
+- Add a Project Detail batch action: "Generate practice tasks" for selected tasks.
+- Start with an MVP that creates unscheduled tasks named `{source task title}: consolidation practice` or, in Chinese UI, `{原任务名}：巩固练习`. Keeping the source title first makes alphabetical/manual-adjacent ordering easier because the practice task stays near the original task instead of grouping every practice task under the same prefix.
+- Copy `project_id` and `milestone_id` from each source task. Leave `date` null by default so they enter the unscheduled queue; optionally set `due_date` based on a simple offset such as tomorrow or three days later.
+- Add a confirmation side panel before creation, showing the generated task list, duplicate warnings, and options:
+  - naming prefix
+  - keep same milestone
+  - due date offset
+  - skip tasks that already have a matching practice task
+- To prevent duplicate generation, add a lightweight relationship field later if needed, such as `source_event_id` plus `task_type = practice`; for the MVP, duplicate detection can match same project, same milestone, and same generated title.
+- Generated practice tasks should participate in existing batch completion, review enrollment, weekly scheduling, and project statistics without special-case UI.
+
+Follow-up improvements:
+
+- Add undo after batch generation, for example `已生成 X 个 · 撤销`, deleting only the tasks created in the latest generation action. Status: implemented.
+- Add a generation preview side panel before creation, showing tasks that will be created, duplicates that will be skipped, whether milestone is inherited, and optional due-date offset. Status: implemented.
+- After generating practice tasks, suggest or optionally apply task-name sorting so source tasks and `{原任务名}：巩固练习` stay adjacent. Status: implemented as a preview option, enabled by default.
+- Add project-level learning-loop statistics: source task count, consolidation practice count, completed practice ratio, and due review count. This helps distinguish "heard the lesson" from "practiced and retained it". Status: implemented in Project Detail statistics.
+
 ## Follow-up Small Improvements
 
 These are smaller follow-up points discovered while implementing the main ideas above.
@@ -176,6 +256,8 @@ These are smaller follow-up points discovered while implementing the main ideas 
 - Dashboard task rows should optionally display milestone labels. Status: implemented.
 - Auto-scheduling should prioritize the current milestone when possible.
 - Auto-scheduling should expose max tasks per day and skip weekends options.
+- Auto-scheduling should become more constrained and explainable: max tasks per day, skip weekends, and prioritize current milestone should be presented as explicit user-controlled options rather than hidden behavior.
+- Review reminders should support optional system notifications and a preferred reminder time, ideally opening the dedicated Review page when clicked.
 - Weekly view should support quick movement of tasks between days, ideally by drag and drop. Status: implemented.
 - Project detail can add overview, statistics, settings, and an optional milestone-grouped task view. Status: implemented.
 - Add `completed_at` later if completion-time analytics become important. Status: implemented.
@@ -200,6 +282,10 @@ These ideas focus on making the app feel more coherent, easier to scan, and less
 9. Add Dashboard weekly-view density controls and visibility filters such as compact/comfortable, hide completed, and project-colored task accents. Status: implemented.
 10. Reduce excessive card/floating-surface styling where a denser workbench layout would improve scanning and repeated use. Status: implemented.
 11. Add a Settings preference to switch Dashboard between the denser workbench/table layout and the older rounded card layout for Today's Workbench, week view, and month view. Status: implemented.
+12. Add richer completion feedback with animated checkmarks, lightweight celebration, and optional crisp completion sound. Status: implemented.
+13. Audit modal-heavy workflows and replace high-frequency, information-dense dialogs with side panels, inline sections, or split views. Keep modal dialogs for destructive confirmations and short one-off actions. Status: first pass implemented for Dashboard day management, Project Detail milestone edit / batch add, Weekly Schedule reschedule preview, and Habit history statistics.
+14. Make desktop/fullscreen layouts use available width, especially Projects and Weekly Schedule. Projects should feel like a workspace with filters and the project list side by side; Weekly Schedule should use a seven-column planning surface instead of a narrow vertical strip. Status: implemented for Projects and Weekly Schedule.
+15. Move full review workflow into a dedicated Review page while keeping Dashboard as a lightweight daily summary. Remove low-value Dashboard quick-add controls so the first screen stays focused on execution, review, overdue, and unscheduled work. Status: implemented.
 
 ## Low Priority / Polish
 

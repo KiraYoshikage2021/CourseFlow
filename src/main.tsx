@@ -6,6 +6,7 @@ import DashboardPage from "./pages/DashboardPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
 import SchedulePage from "./pages/WeeklySchedulePage";
+import ReviewPage from "./pages/ReviewPage";
 import HabitsPage from "./pages/HabitsPage";
 import ImportPage from "./pages/ImportPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -25,6 +26,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="schedule" element={<SchedulePage />} />
+          <Route path="review" element={<ReviewPage />} />
           <Route path="habits" element={<HabitsPage />} />
           <Route path="import" element={<ImportPage />} />
           <Route path="settings" element={<SettingsPage />} />

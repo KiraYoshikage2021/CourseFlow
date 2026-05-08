@@ -56,6 +56,8 @@ pub struct CalendarEvent {
     pub is_pinned: bool,
     pub project_id: Option<String>,
     pub milestone_id: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,4 +67,73 @@ pub struct RescheduleChange {
     pub project_id: String,
     pub old_date: Option<String>,
     pub new_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewItem {
+    pub id: String,
+    pub title: String,
+    pub source_event_id: Option<String>,
+    pub project_id: Option<String>,
+    pub milestone_id: Option<String>,
+    pub created_at: String,
+    pub is_active: bool,
+    pub due_date: String,
+    pub last_reviewed_at: Option<String>,
+    pub stability: f64,
+    pub difficulty: f64,
+    pub scheduled_days: i64,
+    pub elapsed_days: i64,
+    pub reps: i64,
+    pub lapses: i64,
+    pub project_name: Option<String>,
+    pub milestone_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewRatingStats {
+    pub again: i64,
+    pub hard: i64,
+    pub good: i64,
+    pub easy: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewDailyLoad {
+    pub date: String,
+    pub due_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewStats {
+    pub total_active: i64,
+    pub due_today: i64,
+    pub overdue: i64,
+    pub due_next_7_days: i64,
+    pub reviewed_today: i64,
+    pub reviewed_last_7_days: i64,
+    pub rating_counts_30_days: ReviewRatingStats,
+    pub retention_percent_30_days: f64,
+    pub upcoming_load_7_days: Vec<ReviewDailyLoad>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsrsSettings {
+    pub desired_retention: f64,
+    pub maximum_interval: i64,
+    pub weights: Vec<f64>,
+    pub optimized_at: Option<String>,
+    pub optimizer_review_count: i64,
+    pub optimizer_loss: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsrsOptimizeResult {
+    pub updated: bool,
+    pub message: String,
+    pub reviewed_count: i64,
+    pub prediction_count: i64,
+    pub previous_loss: Option<f64>,
+    pub optimized_loss: Option<f64>,
+    pub settings: FsrsSettings,
 }

@@ -1,7 +1,9 @@
 use tauri::Manager;
 mod commands;
 mod db;
+mod fsrs;
 mod models;
+mod review;
 use commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +39,7 @@ pub fn run() {
             get_events_by_date,
             get_events_by_month,
             get_events_by_project,
+            get_events_completed_between,
             get_overdue_events,
             get_unscheduled_events,
             add_event,
@@ -44,6 +47,8 @@ pub fn run() {
             reschedule_event,
             assign_event_milestone,
             batch_assign_event_milestone,
+            auto_sort_project_tasks,
+            reorder_project_tasks,
             delete_event,
             add_events_batch,
             batch_delete_events,
@@ -59,6 +64,13 @@ pub fn run() {
             apply_reschedule_changes,
             undo_reschedule_changes,
             get_project_stats,
+            get_due_review_items,
+            get_review_items_by_project,
+            get_review_stats,
+            get_fsrs_settings,
+            optimize_fsrs_parameters,
+            set_event_review_enabled,
+            review_item,
             export_backup,
             import_backup,
             import_flutter_backup,
